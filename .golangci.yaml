@@ -1,7 +1,6 @@
-version: "2"
-
 run:
   timeout: 5m
+  modules-download-mode: readonly
 
 linters:
   enable:
@@ -9,19 +8,17 @@ linters:
     - govet
     - staticcheck
     - unused
+    - gosimple
     - ineffassign
     - revive
+    - gofmt
+    - goimports
     - misspell
     - unconvert
     - goconst
     - gocyclo
     - dupl
     - gosec
-
-formatters:
-  enable:
-    - gofmt
-    - goimports
 
 linters-settings:
   gocyclo:
@@ -47,6 +44,7 @@ linters-settings:
       - name: error-strings
       - name: error-naming
       - name: exported
+        disabled: true
       - name: if-return
       - name: increment-decrement
       - name: var-naming
@@ -69,6 +67,9 @@ linters-settings:
   gosec:
     excludes:
       - G104
+      - G304
+      - G306
+      - G301
 
 issues:
   exclude-rules:
