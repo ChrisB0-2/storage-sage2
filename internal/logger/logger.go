@@ -161,7 +161,7 @@ func (l *JSONLogger) log(level Level, msg string, fields []Field) {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		// Fallback to simple format if JSON fails
-		fmt.Fprintf(l.output, "%s [%s] %s\n", entry.Time, entry.Level, msg)
+		_, _ = fmt.Fprintf(l.output, "%s [%s] %s\n", entry.Time, entry.Level, msg)
 		return
 	}
 

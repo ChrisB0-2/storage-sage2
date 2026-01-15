@@ -16,6 +16,7 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/core"
 	"github.com/ChrisB0-2/storage-sage/internal/executor"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
+	"github.com/ChrisB0-2/storage-sage/internal/metrics"
 	"github.com/ChrisB0-2/storage-sage/internal/planner"
 	"github.com/ChrisB0-2/storage-sage/internal/policy"
 	"github.com/ChrisB0-2/storage-sage/internal/safety"
@@ -39,6 +40,8 @@ var (
 	allowDirDelete = flag.Bool("allow-dir-delete", false, "allow deletion of directories")
 	minSizeMB      = flag.Int("min-size-mb", -1, "minimum file size in MB (-1 = use config default)")
 	extensions     = flag.String("extensions", "", "comma-separated extensions to match")
+	enableMetrics  = flag.Bool("metrics", false, "enable Prometheus metrics endpoint")
+	metricsAddr    = flag.String("metrics-addr", "", "metrics server address (default :9090)")
 )
 
 func main() {
@@ -177,6 +180,14 @@ func mergeFlags(cfg *config.Config) {
 		}
 		cfg.Policy.Extensions = exts
 	}
+
+	// Merge metrics flags
+	if flagSet["metrics"] {
+		cfg.Metrics.Enabled = *enableMetrics
+	}
+	if flagSet["metrics-addr"] && *metricsAddr != "" {
+		cfg.Daemon.MetricsAddr = *metricsAddr
+	}
 }
 
 // initLogger creates a logger based on configuration.
@@ -211,6 +222,33 @@ func run(cfg *config.Config, log logger.Logger) error {
 
 	runMode := core.Mode(cfg.Execution.Mode)
 
+	// Initialize metrics (Prometheus or Noop)
+	var m core.Metrics
+	var metricsServer *metrics.Server
+	if cfg.Metrics.Enabled {
+		m = metrics.NewPrometheus(nil)
+		metricsServer = metrics.NewServer(cfg.Daemon.MetricsAddr)
+
+		// Start metrics server in background
+		go func() {
+			log.Info("metrics server starting", logger.F("addr", metricsServer.Addr()))
+			if err := metricsServer.Start(); err != nil {
+				log.Error("metrics server error", logger.F("error", err.Error()))
+			}
+		}()
+
+		// Shutdown metrics server when done
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+				log.Warn("metrics server shutdown error", logger.F("error", err.Error()))
+			}
+		}()
+	} else {
+		m = metrics.NewNoop()
+	}
+
 	// Auditor (optional)
 	var aud core.Auditor
 	if cfg.Execution.AuditPath != "" {
@@ -227,9 +265,9 @@ func run(cfg *config.Config, log logger.Logger) error {
 		}()
 	}
 
-	// Components with logger injection
-	sc := scanner.NewWalkDirWithLogger(log)
-	pl := planner.NewSimpleWithLogger(log)
+	// Components with logger and metrics injection
+	sc := scanner.NewWalkDirWithMetrics(log, m)
+	pl := planner.NewSimpleWithMetrics(log, m)
 	safe := safety.NewWithLogger(log)
 
 	// Build policy: start with age, optionally add size/extension filters
@@ -358,7 +396,7 @@ func run(cfg *config.Config, log logger.Logger) error {
 
 	// Execute pass (only in execute mode)
 	if runMode == core.ModeExecute {
-		del := executor.NewSimpleWithLogger(safe, safetyCfg, log)
+		del := executor.NewSimpleWithMetrics(safe, safetyCfg, log, m)
 
 		var (
 			actionsAttempted int

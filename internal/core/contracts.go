@@ -122,11 +122,26 @@ type AuditEvent struct {
 	Err    error
 }
 
+// Metrics defines the interface for collecting operational metrics.
 type Metrics interface {
-	IncCandidatesScanned(root string)
+	// Scanning metrics
+	IncFilesScanned(root string)
+	IncDirsScanned(root string)
+	ObserveScanDuration(root string, duration time.Duration)
+
+	// Planning metrics
 	IncPolicyDecision(reason string, allowed bool)
 	IncSafetyVerdict(reason string, allowed bool)
-	ObserveAction(result ActionResult)
+	SetBytesEligible(bytes int64)
+	SetFilesEligible(count int)
+
+	// Execution metrics
+	IncFilesDeleted(root string)
+	IncDirsDeleted(root string)
+	AddBytesFreed(bytes int64)
+	IncDeleteErrors(reason string)
+
+	// System metrics
 	SetDiskUsage(percent float64)
 	SetCPUUsage(percent float64)
 }

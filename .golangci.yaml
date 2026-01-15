@@ -1,6 +1,7 @@
+version: "2"
+
 run:
   timeout: 5m
-  modules-download-mode: readonly
 
 linters:
   enable:
@@ -8,18 +9,19 @@ linters:
     - govet
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - typecheck
     - revive
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - goconst
     - gocyclo
     - dupl
     - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 linters-settings:
   gocyclo:
@@ -66,7 +68,7 @@ linters-settings:
 
   gosec:
     excludes:
-      - G104  # Unhandled errors (too noisy for some patterns)
+      - G104
 
 issues:
   exclude-rules:

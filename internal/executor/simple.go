@@ -10,6 +10,7 @@ import (
 
 	"github.com/ChrisB0-2/storage-sage/internal/core"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
+	"github.com/ChrisB0-2/storage-sage/internal/metrics"
 )
 
 // Action result reason constants.
@@ -24,20 +25,22 @@ const (
 // It enforces an execute-time safety re-check (TOCTOU hard gate) immediately before mutation.
 // If an Auditor is provided, it records an AuditEvent for each executed item outcome.
 type Simple struct {
-	safe core.Safety
-	aud  core.Auditor
-	cfg  core.SafetyConfig
-	now  func() time.Time
-	log  logger.Logger
+	safe    core.Safety
+	aud     core.Auditor
+	cfg     core.SafetyConfig
+	now     func() time.Time
+	log     logger.Logger
+	metrics core.Metrics
 }
 
-// NewSimple creates an executor with no-op logging.
+// NewSimple creates an executor with no-op logging and metrics.
 func NewSimple(safe core.Safety, cfg core.SafetyConfig) *Simple {
 	return &Simple{
-		safe: safe,
-		cfg:  cfg,
-		now:  time.Now,
-		log:  logger.NewNop(),
+		safe:    safe,
+		cfg:     cfg,
+		now:     time.Now,
+		log:     logger.NewNop(),
+		metrics: metrics.NewNoop(),
 	}
 }
 
@@ -47,10 +50,28 @@ func NewSimpleWithLogger(safe core.Safety, cfg core.SafetyConfig, log logger.Log
 		log = logger.NewNop()
 	}
 	return &Simple{
-		safe: safe,
-		cfg:  cfg,
-		now:  time.Now,
-		log:  log,
+		safe:    safe,
+		cfg:     cfg,
+		now:     time.Now,
+		log:     log,
+		metrics: metrics.NewNoop(),
+	}
+}
+
+// NewSimpleWithMetrics creates an executor with logger and metrics.
+func NewSimpleWithMetrics(safe core.Safety, cfg core.SafetyConfig, log logger.Logger, m core.Metrics) *Simple {
+	if log == nil {
+		log = logger.NewNop()
+	}
+	if m == nil {
+		m = metrics.NewNoop()
+	}
+	return &Simple{
+		safe:    safe,
+		cfg:     cfg,
+		now:     time.Now,
+		log:     log,
+		metrics: m,
 	}
 }
 
@@ -144,12 +165,15 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 				return res
 			}
 			e.log.Warn("delete failed", logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
+			e.metrics.IncDeleteErrors(reasonDeleteFailed)
 			res.Reason = reasonDeleteFailed
 			res.Err = err
 			return res
 		}
 
 		e.log.Info("deleted", logger.F("path", item.Candidate.Path), logger.F("bytes_freed", item.Candidate.SizeBytes))
+		e.metrics.IncFilesDeleted(item.Candidate.Root)
+		e.metrics.AddBytesFreed(item.Candidate.SizeBytes)
 		res.Deleted = true
 		res.BytesFreed = item.Candidate.SizeBytes
 		res.Reason = reasonDeleted
@@ -181,12 +205,15 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 				return res
 			}
 			e.log.Warn("delete failed", logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
+			e.metrics.IncDeleteErrors(reasonDeleteFailed)
 			res.Reason = reasonDeleteFailed
 			res.Err = err
 			return res
 		}
 
 		e.log.Info("deleted", logger.F("path", item.Candidate.Path), logger.F("bytes_freed", dirSize), logger.F("type", "dir"))
+		e.metrics.IncDirsDeleted(item.Candidate.Root)
+		e.metrics.AddBytesFreed(dirSize)
 		res.Deleted = true
 		res.BytesFreed = dirSize
 		res.Reason = reasonDeleted

@@ -9,15 +9,20 @@ import (
 
 	"github.com/ChrisB0-2/storage-sage/internal/core"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
+	"github.com/ChrisB0-2/storage-sage/internal/metrics"
 )
 
 type WalkDirScanner struct {
-	log logger.Logger
+	log     logger.Logger
+	metrics core.Metrics
 }
 
-// NewWalkDir creates a scanner with no-op logging.
+// NewWalkDir creates a scanner with no-op logging and metrics.
 func NewWalkDir() *WalkDirScanner {
-	return &WalkDirScanner{log: logger.NewNop()}
+	return &WalkDirScanner{
+		log:     logger.NewNop(),
+		metrics: metrics.NewNoop(),
+	}
 }
 
 // NewWalkDirWithLogger creates a scanner with the given logger.
@@ -25,7 +30,24 @@ func NewWalkDirWithLogger(log logger.Logger) *WalkDirScanner {
 	if log == nil {
 		log = logger.NewNop()
 	}
-	return &WalkDirScanner{log: log}
+	return &WalkDirScanner{
+		log:     log,
+		metrics: metrics.NewNoop(),
+	}
+}
+
+// NewWalkDirWithMetrics creates a scanner with logger and metrics.
+func NewWalkDirWithMetrics(log logger.Logger, m core.Metrics) *WalkDirScanner {
+	if log == nil {
+		log = logger.NewNop()
+	}
+	if m == nil {
+		m = metrics.NewNoop()
+	}
+	return &WalkDirScanner{
+		log:     log,
+		metrics: m,
+	}
 }
 
 // Scan walks each root and emits Candidates. It never deletes.
@@ -45,6 +67,7 @@ func (s *WalkDirScanner) Scan(ctx context.Context, req core.ScanRequest) (<-chan
 				root = absRoot
 			}
 
+			scanStart := time.Now()
 			walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
 					return err
@@ -123,9 +146,19 @@ func (s *WalkDirScanner) Scan(ctx context.Context, req core.ScanRequest) (<-chan
 					}
 				}
 
+				// Record metrics
+				if tt == core.TargetFile {
+					s.metrics.IncFilesScanned(root)
+				} else {
+					s.metrics.IncDirsScanned(root)
+				}
+
 				out <- c
 				return nil
 			})
+
+			// Record scan duration for this root
+			s.metrics.ObserveScanDuration(root, time.Since(scanStart))
 
 			if walkErr != nil {
 				s.log.Warn("scan error", logger.F("root", root), logger.F("error", walkErr.Error()))
