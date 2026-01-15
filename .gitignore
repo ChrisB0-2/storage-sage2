@@ -1,0 +1,18 @@
+# binaries / build outputs
+storage-sage
+dist/
+*.exe
+*.out
+
+# logs / audits
+*.ndjson
+*.jsonl
+*.log
+
+# local tools / agent outputs
+.claude/
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store

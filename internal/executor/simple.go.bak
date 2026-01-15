@@ -1,0 +1,167 @@
+// internal/executor/simple.go
+package executor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/ChrisB0-2/storage-sage/internal/core"
+)
+
+// Simple executes a single plan item. It is safe-by-default.
+// It enforces an execute-time safety re-check (TOCTOU hard gate) immediately before mutation.
+type Simple struct {
+	safe core.Safety
+	cfg  core.SafetyConfig
+	now  func() time.Time
+}
+
+func NewSimple(safe core.Safety, cfg core.SafetyConfig) *Simple {
+	return &Simple{
+		safe: safe,
+		cfg:  cfg,
+		now:  time.Now,
+	}
+}
+
+// Execute performs the action for one PlanItem.
+// Order of operations (hard gates):
+//  1) policy allow
+//  2) scan-time safety allow
+//  3) execute-time safety re-check (TOCTOU defense)
+//  4) dry-run -> report only
+//  5) execute -> delete (file/dir)
+func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode) core.ActionResult {
+	// Quick cancel check.
+	select {
+	case <-ctx.Done():
+		return e.resultSkipped(item, "ctx_canceled:"+ctx.Err().Error(), ctx.Err())
+	default:
+	}
+
+	// Gate 1: Policy
+	if !item.Decision.Allow {
+		return e.resultSkipped(item, "policy_deny:"+item.Decision.Reason, nil)
+	}
+
+	// Gate 2: Scan-time safety verdict (from planning)
+	if !item.Safety.Allowed {
+		return e.resultSkipped(item, "safety_deny_scan:"+item.Safety.Reason, nil)
+	}
+
+	// Gate 3: Execute-time safety re-check (TOCTOU hard gate)
+	// MUST happen immediately before any mutation.
+	v := e.safe.Validate(ctx, item.Candidate, e.cfg)
+	if !v.Allowed {
+		return e.resultSkipped(item, "safety_deny_execute:"+v.Reason, nil)
+	}
+
+	// Gate 4: Dry-run
+	if mode == core.ModeDryRun {
+		return e.resultWouldDelete(item, nil)
+	}
+
+	// Execute mode required to mutate.
+	if mode != core.ModeExecute {
+		return e.resultSkipped(item, "invalid_mode:"+string(mode), fmt.Errorf("invalid mode: %q", mode))
+	}
+
+	// Gate 5: Type-based delete (fail-closed)
+	path := item.Candidate.Path
+
+	switch item.Candidate.Type {
+	case core.TargetFile:
+		if err := os.Remove(path); err != nil {
+			// If something else removed it, treat as skip-not-fail (idempotent).
+			if errors.Is(err, os.ErrNotExist) {
+				return e.resultSkipped(item, "already_gone", nil)
+			}
+			return e.resultFailed(item, "delete_failed", err)
+		}
+		return e.resultDeleted(item, nil)
+
+	case core.TargetDir:
+		// Even in execute mode, dir deletion must be explicitly allowed.
+		if !e.cfg.AllowDirDelete {
+			return e.resultSkipped(item, "dir_delete_disabled", nil)
+		}
+		if err := os.RemoveAll(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return e.resultSkipped(item, "already_gone", nil)
+			}
+			return e.resultFailed(item, "delete_failed", err)
+		}
+		return e.resultDeleted(item, nil)
+
+	default:
+		return e.resultSkipped(item, "unknown_target_type", fmt.Errorf("unknown target type: %q", item.Candidate.Type))
+	}
+}
+
+//
+// RESULT ADAPTER (YOU MUST ALIGN THESE TO YOUR core.ActionResult FIELDS)
+//
+// I cannot see your core.ActionResult definition in this chat yet.
+// Below, I keep result construction isolated to a few helper functions.
+// Edit ONLY these helpers to match your real struct fields (names/types).
+//
+
+func (e *Simple) resultSkipped(item core.PlanItem, reason string, err error) core.ActionResult {
+	return core.ActionResult{
+		// TODO: map to your struct fields
+		// Example possibilities:
+		// Path:   item.Candidate.Path,
+		// Action: "skip",
+		// Ok:     err == nil,
+		// Skipped: true,
+		// Reason: reason,
+		// Error:  errString(err),
+	}
+}
+
+func (e *Simple) resultWouldDelete(item core.PlanItem, err error) core.ActionResult {
+	return core.ActionResult{
+		// TODO: map to your struct fields
+		// Example:
+		// Path:   item.Candidate.Path,
+		// Action: "would_delete",
+		// Ok:     err == nil,
+		// Reason: "dry_run",
+	}
+}
+
+func (e *Simple) resultDeleted(item core.PlanItem, err error) core.ActionResult {
+	return core.ActionResult{
+		// TODO: map to your struct fields
+		// Example:
+		// Path:   item.Candidate.Path,
+		// Action: "deleted",
+		// Ok:     err == nil,
+		// Bytes:  item.Candidate.SizeBytes,
+		// Reason: "ok",
+	}
+}
+
+func (e *Simple) resultFailed(item core.PlanItem, reason string, err error) core.ActionResult {
+	return core.ActionResult{
+		// TODO: map to your struct fields
+		// Example:
+		// Path:   item.Candidate.Path,
+		// Action: "error",
+		// Ok:     false,
+		// Reason: reason,
+		// Error:  errString(err),
+	}
+}
+
+// Optional helper if your ActionResult has an Error string field.
+// func errString(err error) string {
+// 	if err == nil {
+// 		return ""
+// 	}
+// 	return err.Error()
+// }
+
