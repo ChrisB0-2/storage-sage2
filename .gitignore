@@ -1,5 +1,5 @@
 # binaries / build outputs
-storage-sage
+/storage-sage
 dist/
 *.exe
 *.out
@@ -16,3 +16,7 @@ dist/
 
 # OS junk
 .DS_Store
+
+# backup files
+*.bak
+*.bak[0-9]*
