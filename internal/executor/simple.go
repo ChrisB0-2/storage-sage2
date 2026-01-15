@@ -12,6 +12,14 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 )
 
+// Action result reason constants.
+const (
+	reasonWouldDelete  = "would_delete"
+	reasonAlreadyGone  = "already_gone"
+	reasonDeleted      = "deleted"
+	reasonDeleteFailed = "delete_failed"
+)
+
 // Simple is a safe-by-default deleter.
 // It enforces an execute-time safety re-check (TOCTOU hard gate) immediately before mutation.
 // If an Auditor is provided, it records an AuditEvent for each executed item outcome.
@@ -112,7 +120,7 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 
 	// Gate 4: Dry run
 	if mode == core.ModeDryRun {
-		res.Reason = "would_delete"
+		res.Reason = reasonWouldDelete
 		if item.Candidate.Type == core.TargetFile {
 			res.BytesFreed = item.Candidate.SizeBytes
 		}
@@ -132,11 +140,11 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 		if err := os.Remove(item.Candidate.Path); err != nil {
 			// Idempotent behavior: already removed is not fatal.
 			if errors.Is(err, os.ErrNotExist) {
-				res.Reason = "already_gone"
+				res.Reason = reasonAlreadyGone
 				return res
 			}
 			e.log.Warn("delete failed", logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
-			res.Reason = "delete_failed"
+			res.Reason = reasonDeleteFailed
 			res.Err = err
 			return res
 		}
@@ -144,7 +152,7 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 		e.log.Info("deleted", logger.F("path", item.Candidate.Path), logger.F("bytes_freed", item.Candidate.SizeBytes))
 		res.Deleted = true
 		res.BytesFreed = item.Candidate.SizeBytes
-		res.Reason = "deleted"
+		res.Reason = reasonDeleted
 		return res
 
 	case core.TargetDir:
@@ -169,11 +177,11 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 
 		if err := os.RemoveAll(item.Candidate.Path); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				res.Reason = "already_gone"
+				res.Reason = reasonAlreadyGone
 				return res
 			}
 			e.log.Warn("delete failed", logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
-			res.Reason = "delete_failed"
+			res.Reason = reasonDeleteFailed
 			res.Err = err
 			return res
 		}
@@ -181,7 +189,7 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 		e.log.Info("deleted", logger.F("path", item.Candidate.Path), logger.F("bytes_freed", dirSize), logger.F("type", "dir"))
 		res.Deleted = true
 		res.BytesFreed = dirSize
-		res.Reason = "deleted"
+		res.Reason = reasonDeleted
 		return res
 
 	default:
@@ -203,9 +211,9 @@ func (e *Simple) record(ctx context.Context, item core.PlanItem, res core.Action
 		Level: "info",
 		Action: func() string {
 			switch res.Reason {
-			case "deleted":
+			case reasonDeleted:
 				return "delete"
-			case "would_delete":
+			case reasonWouldDelete:
 				return "would_delete"
 			default:
 				return "skip"

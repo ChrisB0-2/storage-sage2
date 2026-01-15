@@ -308,11 +308,11 @@ func run(cfg *config.Config, log logger.Logger) error {
 
 	// Summaries (plan-time)
 	var (
-		total               = len(plan)
-		policyAllowed       = 0
-		safetyAllowed       = 0
-		reasonCounts        = map[string]int{}
-		eligibleBytes int64 = 0
+		total         = len(plan)
+		policyAllowed int
+		safetyAllowed int
+		reasonCounts  = map[string]int{}
+		eligibleBytes int64
 	)
 
 	for _, it := range plan {
@@ -361,12 +361,12 @@ func run(cfg *config.Config, log logger.Logger) error {
 		del := executor.NewSimpleWithLogger(safe, safetyCfg, log)
 
 		var (
-			actionsAttempted       = 0
-			deletedCount           = 0
-			executeDenied          = 0
-			alreadyGone            = 0
-			deleteFailed           = 0
-			bytesFreed       int64 = 0
+			actionsAttempted int
+			deletedCount     int
+			executeDenied    int
+			alreadyGone      int
+			deleteFailed     int
+			bytesFreed       int64
 		)
 
 		for _, it := range plan {

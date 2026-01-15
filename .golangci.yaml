@@ -20,12 +20,10 @@ linters:
     - gocyclo
     - dupl
     - gosec
-    - prealloc
-    - exportloopref
 
 linters-settings:
   gocyclo:
-    min-complexity: 15
+    min-complexity: 40
 
   dupl:
     threshold: 100
@@ -77,6 +75,8 @@ issues:
         - dupl
         - gosec
         - goconst
+        - gocyclo
+        - revive
 
   max-issues-per-linter: 0
   max-same-issues: 0

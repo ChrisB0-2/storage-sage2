@@ -165,8 +165,8 @@ func (l *JSONLogger) log(level Level, msg string, fields []Field) {
 		return
 	}
 
-	l.output.Write(data)
-	l.output.Write([]byte("\n"))
+	_, _ = l.output.Write(data)
+	_, _ = l.output.Write([]byte("\n"))
 }
 
 // SetLevel changes the log level.

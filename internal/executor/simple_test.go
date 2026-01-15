@@ -339,7 +339,7 @@ func TestExecuteContextCancellation(t *testing.T) {
 	result := exec.Execute(ctx, item, core.ModeExecute)
 
 	if result.Deleted {
-		t.Error("expected Deleted=false when context cancelled")
+		t.Error("expected Deleted=false when context canceled")
 	}
 	if result.Reason != "ctx_canceled" {
 		t.Errorf("expected reason 'ctx_canceled', got '%s'", result.Reason)

@@ -50,7 +50,6 @@ func (p *CompositePolicy) Evaluate(ctx context.Context, c core.Candidate, env co
 // Returns the minimum score and first deny reason encountered.
 func (p *CompositePolicy) evaluateAnd(ctx context.Context, c core.Candidate, env core.EnvSnapshot) core.Decision {
 	minScore := int(^uint(0) >> 1) // Max int
-	reasons := make([]string, 0, len(p.Policies))
 
 	for _, pol := range p.Policies {
 		dec := pol.Evaluate(ctx, c, env)
@@ -64,7 +63,6 @@ func (p *CompositePolicy) evaluateAnd(ctx context.Context, c core.Candidate, env
 		if dec.Score < minScore {
 			minScore = dec.Score
 		}
-		reasons = append(reasons, dec.Reason)
 	}
 
 	return core.Decision{
