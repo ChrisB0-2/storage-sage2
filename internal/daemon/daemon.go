@@ -123,7 +123,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	case sig := <-sigCh:
 		d.log.Info("received signal", logger.F("signal", sig.String()))
 	case <-ctx.Done():
-		d.log.Info("context cancelled")
+		d.log.Info("context canceled")
 	case <-d.stopCh:
 		d.log.Info("stop requested")
 	}
@@ -180,10 +180,10 @@ func (d *Daemon) IsRunning() bool {
 }
 
 // LastRun returns info about the last run.
-func (d *Daemon) LastRun() (time.Time, error, int64) {
+func (d *Daemon) LastRun() (time.Time, int64, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.lastRun, d.lastErr, d.runCount
+	return d.lastRun, d.runCount, d.lastErr
 }
 
 // runScheduler runs the cleanup on the configured schedule.
@@ -285,7 +285,7 @@ func (d *Daemon) startHTTP() error {
 
 	// Status endpoint - detailed status information
 	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
-		lastRun, lastErr, runCount := d.LastRun()
+		lastRun, runCount, lastErr := d.LastRun()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 

@@ -144,7 +144,7 @@ func TestDaemon_IsRunning(t *testing.T) {
 func TestDaemon_LastRun(t *testing.T) {
 	d := New(nil, nil, Config{})
 
-	lastRun, lastErr, runCount := d.LastRun()
+	lastRun, runCount, lastErr := d.LastRun()
 	if !lastRun.IsZero() {
 		t.Error("expected zero lastRun initially")
 	}
@@ -164,7 +164,7 @@ func TestDaemon_LastRun(t *testing.T) {
 	d.runCount = 5
 	d.mu.Unlock()
 
-	lastRun, lastErr, runCount = d.LastRun()
+	lastRun, runCount, lastErr = d.LastRun()
 	if !lastRun.Equal(now) {
 		t.Error("expected lastRun to match")
 	}
@@ -193,7 +193,7 @@ func TestDaemon_TriggerRun_Success(t *testing.T) {
 		t.Error("expected runFunc to be called")
 	}
 
-	_, _, runCount := d.LastRun()
+	_, runCount, _ := d.LastRun()
 	if runCount != 1 {
 		t.Errorf("expected runCount=1, got %d", runCount)
 	}
@@ -212,7 +212,7 @@ func TestDaemon_TriggerRun_Error(t *testing.T) {
 		t.Errorf("TriggerRun() error = %v, want %v", err, testErr)
 	}
 
-	_, lastErr, _ := d.LastRun()
+	_, _, lastErr := d.LastRun()
 	if lastErr != testErr {
 		t.Error("expected lastErr to be set")
 	}
@@ -343,7 +343,7 @@ func TestStatusEndpoint(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		lastRun, lastErr, runCount := d.LastRun()
+		lastRun, runCount, lastErr := d.LastRun()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 
@@ -622,7 +622,7 @@ func TestExecuteRun_TracksMetadata(t *testing.T) {
 		t.Errorf("executeRun() error = %v", err)
 	}
 
-	lastRun, lastErr, runCount := d.LastRun()
+	lastRun, runCount, lastErr := d.LastRun()
 
 	if lastRun.Before(before) {
 		t.Error("expected lastRun to be after test start")
@@ -648,7 +648,7 @@ func TestExecuteRun_TracksErrors(t *testing.T) {
 		t.Errorf("executeRun() error = %v, want %v", err, testErr)
 	}
 
-	_, lastErr, _ := d.LastRun()
+	_, _, lastErr := d.LastRun()
 	if lastErr != testErr {
 		t.Error("expected lastErr to be set")
 	}
