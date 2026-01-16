@@ -17,7 +17,7 @@ func TestWebhook_Notify(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedHeaders = r.Header
 		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &received)
+		_ = json.Unmarshal(body, &received)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()

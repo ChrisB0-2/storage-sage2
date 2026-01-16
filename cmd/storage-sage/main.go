@@ -241,7 +241,7 @@ func runStatsCmd(args []string) {
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		enc.Encode(stats)
+		_ = enc.Encode(stats)
 	} else {
 		fmt.Println("Audit Database Statistics")
 		fmt.Println("=========================")
@@ -264,7 +264,7 @@ func runVerifyCmd(args []string) {
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *dbPath == "" {
 		fmt.Fprintf(os.Stderr, "error: -db is required\n")
@@ -312,9 +312,8 @@ func parseTimeArg(s string) time.Time {
 			multiplier = time.Minute
 		}
 		if multiplier > 0 {
-			if num, err := fmt.Sscanf(numStr, "%d", new(int)); err == nil && num > 0 {
-				var n int
-				fmt.Sscanf(numStr, "%d", &n)
+			var n int
+			if _, err := fmt.Sscanf(numStr, "%d", &n); err == nil && n > 0 {
 				return time.Now().Add(-time.Duration(n) * multiplier)
 			}
 		}
@@ -407,8 +406,8 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 			rootStr = cfg.Scan.Roots[0]
 		}
 
-		// Notify cleanup started
-		notify.Notify(ctx, notifier.WebhookPayload{
+		// Notify cleanup started (fire-and-forget)
+		_ = notify.Notify(ctx, notifier.WebhookPayload{
 			Event:     notifier.EventCleanupStarted,
 			Timestamp: startTime,
 			Message:   fmt.Sprintf("Cleanup started for %s", rootStr),
@@ -440,7 +439,7 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 			payload.Message = "Cleanup completed successfully"
 		}
 
-		notify.Notify(ctx, payload)
+		_ = notify.Notify(ctx, payload)
 
 		return err
 	}
@@ -720,30 +719,8 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 	pl := planner.NewSimpleWithMetrics(log, m)
 	safe := safety.NewWithLogger(log)
 
-	// Build policy: start with age, optionally add size/extension filters
-	var pol core.Policy = policy.NewAgePolicy(cfg.Policy.MinAgeDays)
-
-	// If additional filters are specified, build a composite policy
-	var additionalPolicies []core.Policy
-	if cfg.Policy.MinSizeMB > 0 {
-		additionalPolicies = append(additionalPolicies, policy.NewSizePolicy(cfg.Policy.MinSizeMB))
-	}
-	if len(cfg.Policy.Extensions) > 0 {
-		additionalPolicies = append(additionalPolicies, policy.NewExtensionPolicy(cfg.Policy.Extensions))
-	}
-
-	// Combine with AND: must match age AND any additional filters
-	if len(additionalPolicies) > 0 {
-		allPolicies := append([]core.Policy{pol}, additionalPolicies...)
-		pol = policy.NewCompositePolicy(policy.ModeAnd, allPolicies...)
-	}
-
-	// Add exclusion policy (must NOT match any exclusion pattern)
-	if len(cfg.Policy.Exclusions) > 0 {
-		exclusionPolicy := policy.NewExclusionPolicy(cfg.Policy.Exclusions)
-		pol = policy.NewCompositePolicy(policy.ModeAnd, pol, exclusionPolicy)
-		log.Debug("exclusion patterns active", logger.F("patterns", cfg.Policy.Exclusions))
-	}
+	// Build policy from config
+	pol := buildPolicy(cfg.Policy, log)
 
 	// Environment snapshot
 	env := core.EnvSnapshot{
@@ -801,55 +778,8 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 		}
 	}
 
-	// Summaries (plan-time)
-	var (
-		total         = len(plan)
-		policyAllowed int
-		safetyAllowed int
-		reasonCounts  = map[string]int{}
-		eligibleBytes int64
-	)
-
-	for _, it := range plan {
-		if !it.Safety.Allowed {
-			reasonCounts[reasonKey(it.Safety.Reason)]++
-		}
-		if it.Decision.Allow {
-			policyAllowed++
-		}
-		if it.Safety.Allowed {
-			safetyAllowed++
-		}
-		if it.Decision.Allow && it.Safety.Allowed && it.Candidate.Type == core.TargetFile {
-			eligibleBytes += it.Candidate.SizeBytes
-		}
-	}
-
-	if runMode == core.ModeExecute {
-		fmt.Printf("StorageSage (EXECUTE PIPELINE)\n")
-	} else {
-		fmt.Printf("StorageSage (DRY PIPELINE)\n")
-	}
-
-	fmt.Printf("roots: %v\n", cfg.Scan.Roots)
-	fmt.Printf("candidates: %d\n", total)
-	fmt.Printf("policy allowed: %d\n", policyAllowed)
-	fmt.Printf("safety allowed: %d\n", safetyAllowed)
-	fmt.Printf("eligible bytes (policy+safe): %d\n", eligibleBytes)
-	fmt.Printf("safety blocked: %d\n", total-safetyAllowed)
-	if len(reasonCounts) > 0 {
-		keys := make([]string, 0, len(reasonCounts))
-		for k := range reasonCounts {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		fmt.Println("safety reasons:")
-		for _, k := range keys {
-			fmt.Printf("  - %s: %d\n", k, reasonCounts[k])
-		}
-		fmt.Println()
-	}
-	fmt.Println()
+	// Print plan summary
+	printPlanSummary(plan, runMode, cfg.Scan.Roots)
 
 	// Execute pass (only in execute mode)
 	if runMode == core.ModeExecute {
@@ -906,8 +836,8 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 	}
 
 	limit := cfg.Execution.MaxItems
-	if limit > total {
-		limit = total
+	if limit > len(plan) {
+		limit = len(plan)
 	}
 
 	fmt.Printf("First %d plan items:\n", limit)
@@ -931,6 +861,88 @@ func reasonKey(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// printPlanSummary calculates and prints a summary of the cleanup plan.
+func printPlanSummary(plan []core.PlanItem, runMode core.Mode, roots []string) {
+	var (
+		total         = len(plan)
+		policyAllowed int
+		safetyAllowed int
+		reasonCounts  = map[string]int{}
+		eligibleBytes int64
+	)
+
+	for _, it := range plan {
+		if !it.Safety.Allowed {
+			reasonCounts[reasonKey(it.Safety.Reason)]++
+		}
+		if it.Decision.Allow {
+			policyAllowed++
+		}
+		if it.Safety.Allowed {
+			safetyAllowed++
+		}
+		if it.Decision.Allow && it.Safety.Allowed && it.Candidate.Type == core.TargetFile {
+			eligibleBytes += it.Candidate.SizeBytes
+		}
+	}
+
+	if runMode == core.ModeExecute {
+		fmt.Printf("StorageSage (EXECUTE PIPELINE)\n")
+	} else {
+		fmt.Printf("StorageSage (DRY PIPELINE)\n")
+	}
+
+	fmt.Printf("roots: %v\n", roots)
+	fmt.Printf("candidates: %d\n", total)
+	fmt.Printf("policy allowed: %d\n", policyAllowed)
+	fmt.Printf("safety allowed: %d\n", safetyAllowed)
+	fmt.Printf("eligible bytes (policy+safe): %d\n", eligibleBytes)
+	fmt.Printf("safety blocked: %d\n", total-safetyAllowed)
+	if len(reasonCounts) > 0 {
+		keys := make([]string, 0, len(reasonCounts))
+		for k := range reasonCounts {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Println("safety reasons:")
+		for _, k := range keys {
+			fmt.Printf("  - %s: %d\n", k, reasonCounts[k])
+		}
+		fmt.Println()
+	}
+	fmt.Println()
+}
+
+// buildPolicy constructs a composite policy from configuration.
+func buildPolicy(cfg config.PolicyConfig, log logger.Logger) core.Policy {
+	// Start with age policy
+	var pol core.Policy = policy.NewAgePolicy(cfg.MinAgeDays)
+
+	// If additional filters are specified, build a composite policy
+	var additionalPolicies []core.Policy
+	if cfg.MinSizeMB > 0 {
+		additionalPolicies = append(additionalPolicies, policy.NewSizePolicy(cfg.MinSizeMB))
+	}
+	if len(cfg.Extensions) > 0 {
+		additionalPolicies = append(additionalPolicies, policy.NewExtensionPolicy(cfg.Extensions))
+	}
+
+	// Combine with AND: must match age AND any additional filters
+	if len(additionalPolicies) > 0 {
+		allPolicies := append([]core.Policy{pol}, additionalPolicies...)
+		pol = policy.NewCompositePolicy(policy.ModeAnd, allPolicies...)
+	}
+
+	// Add exclusion policy (must NOT match any exclusion pattern)
+	if len(cfg.Exclusions) > 0 {
+		exclusionPolicy := policy.NewExclusionPolicy(cfg.Exclusions)
+		pol = policy.NewCompositePolicy(policy.ModeAnd, pol, exclusionPolicy)
+		log.Debug("exclusion patterns active", logger.F("patterns", cfg.Exclusions))
+	}
+
+	return pol
 }
 
 // sortPlan orders plan items: allowed+safe first, then by score, size, modtime, path.
