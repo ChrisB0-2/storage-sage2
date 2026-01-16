@@ -1,0 +1,94 @@
+groups:
+  - name: storage-sage-alerts
+    rules:
+      # Delete errors - triggers when error rate exceeds threshold
+      - alert: StorageSageDeleteErrorsHigh
+        expr: rate(storagesage_executor_delete_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage-Sage experiencing delete errors"
+          description: "Delete error rate is {{ $value | printf \"%.2f\" }}/s over the last 5 minutes. Check permissions and disk health."
+
+      # No deletions happening when files are eligible
+      - alert: StorageSageStalled
+        expr: storagesage_planner_files_eligible > 100 and rate(storagesage_executor_files_deleted_total[15m]) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage-Sage has eligible files but not deleting"
+          description: "{{ $value }} files are eligible for deletion but no deletions occurring. Check if daemon is running in execute mode."
+
+      # High safety block rate - might indicate misconfiguration
+      - alert: StorageSageSafetyBlocksHigh
+        expr: >
+          sum(rate(storagesage_planner_safety_verdicts_total{allowed="false"}[5m]))
+          /
+          sum(rate(storagesage_planner_safety_verdicts_total[5m])) > 0.9
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Storage-Sage blocking most files"
+          description: "Over 90% of scanned files are being blocked by safety checks. This may indicate misconfigured roots or overly restrictive settings."
+
+      # Disk usage critical
+      - alert: StorageSageDiskUsageCritical
+        expr: storagesage_system_disk_usage_percent > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk usage critical on Storage-Sage monitored volume"
+          description: "Disk usage is at {{ $value | printf \"%.1f\" }}%. Immediate cleanup may be required."
+
+      - alert: StorageSageDiskUsageHigh
+        expr: storagesage_system_disk_usage_percent > 80
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage high on Storage-Sage monitored volume"
+          description: "Disk usage is at {{ $value | printf \"%.1f\" }}%. Consider lowering retention thresholds."
+
+      # Slow scans - might indicate filesystem issues
+      - alert: StorageSageScanSlow
+        expr: histogram_quantile(0.95, rate(storagesage_scanner_scan_duration_seconds_bucket[5m])) > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage-Sage scans are slow"
+          description: "95th percentile scan duration is {{ $value | printf \"%.0f\" }}s. Check for filesystem issues or reduce scan depth."
+
+      # Daemon not producing metrics (down)
+      - alert: StorageSageDown
+        expr: absent(storagesage_scanner_files_scanned_total)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Storage-Sage is not running"
+          description: "No metrics received from Storage-Sage for 10 minutes. Check if the daemon is running."
+
+      # Large backlog of eligible bytes
+      - alert: StorageSageLargeBacklog
+        expr: storagesage_planner_bytes_eligible > 107374182400  # 100GB
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage-Sage has large cleanup backlog"
+          description: "{{ $value | humanize1024 }}B eligible for deletion. Consider running manual cleanup or increasing frequency."
+
+      # TOCTOU/safety re-check failures (permission or race issues)
+      - alert: StorageSageTOCTOUFailures
+        expr: rate(storagesage_executor_delete_errors_total{reason="toctou_recheck_failed"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage-Sage TOCTOU re-check failures"
+          description: "Files are changing between scan and delete. This could indicate active processes or race conditions."
