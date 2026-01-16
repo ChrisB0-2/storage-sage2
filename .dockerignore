@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Build artifacts
+storage-sage
+*.exe
+dist/
+
+# Test artifacts
+coverage.out
+*.test
+
+# Documentation (not needed in image)
+*.md
+LICENSE
+
+# Local config examples
+*.yaml.example
+*.yml.example
+
+# CI/CD
+.github/

@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+  storage-sage:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    container_name: storage-sage
+    restart: unless-stopped
+    command:
+      - "-daemon"
+      - "-schedule=1h"
+      - "-root=/data"
+      - "-mode=dry-run"
+      - "-metrics"
+      - "-metrics-addr=:9090"
+      - "-loki"
+      - "-loki-url=http://loki:3100"
+    volumes:
+      # Mount the directory to clean
+      - ./data:/data:rw
+      # Optional: mount config file
+      # - ./storage-sage.yaml:/etc/storage-sage/config.yaml:ro
+    ports:
+      - "8080:8080"   # Daemon API
+      - "9091:9090"   # Metrics (9091 to avoid conflict with Prometheus)
+    networks:
+      - monitoring
+    depends_on:
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./dashboards/alerting-rules.yaml:/etc/prometheus/alerting-rules.yaml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+    networks:
+      - monitoring
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  monitoring:
+    driver: bridge
