@@ -133,8 +133,8 @@ jobs:
           args: '-no-fail -fmt sarif -out gosec-results.sarif ./...'
 
       - name: Upload gosec results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('gosec-results.sarif') != ''
         with:
           sarif_file: gosec-results.sarif
 
@@ -150,6 +150,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image for scanning
+        id: docker-build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -160,6 +161,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Run Trivy vulnerability scanner
+        if: steps.docker-build.outcome == 'success'
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: 'storage-sage:scan'
@@ -168,12 +170,13 @@ jobs:
           severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: trivy-results.sarif
 
       - name: Generate SBOM with Syft
+        if: steps.docker-build.outcome == 'success'
         uses: anchore/sbom-action@v0
         with:
           image: storage-sage:scan
@@ -181,6 +184,7 @@ jobs:
           output-file: sbom.spdx.json
 
       - name: Upload SBOM
+        if: steps.docker-build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: sbom
