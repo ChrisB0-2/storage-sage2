@@ -144,6 +144,7 @@ Time-of-check-time-of-use attacks are prevented by re-running all safety checks 
 | `-protected` | | Additional protected paths (comma-separated) |
 | `-allow-dir-delete` | `false` | Allow deletion of directories |
 | `-audit` | | Path to JSONL audit log (empty = disabled) |
+| `-audit-db` | | Path to SQLite audit database (for long-term storage) |
 | `-metrics` | `false` | Enable Prometheus metrics endpoint |
 | `-metrics-addr` | `:9090` | Prometheus metrics server address |
 | `-daemon` | `false` | Run as long-running daemon |
@@ -239,6 +240,75 @@ When `-audit` is specified, all decisions are logged in JSONL format:
 ```json
 {"time":"2024-01-15T10:30:00Z","level":"info","action":"plan","path":"/data/old.log","fields":{"decision":"allow","reason":"age_ok","score":450}}
 {"time":"2024-01-15T10:30:01Z","level":"info","action":"delete","path":"/data/old.log","fields":{"bytes_freed":1024,"reason":"deleted"}}
+```
+
+## SQLite Audit Database
+
+For long-term audit retention and offline operation (ideal for government/rugged systems), use the SQLite audit backend with `-audit-db`:
+
+```bash
+# Enable SQLite audit logging
+storage-sage -root /tmp -mode execute -audit-db /var/lib/storage-sage/audit.db
+
+# Use both JSONL and SQLite simultaneously
+storage-sage -root /tmp -audit /var/log/storage-sage.jsonl -audit-db /var/lib/storage-sage/audit.db
+```
+
+### Why SQLite for Government/Rugged Systems
+
+- **Offline operation**: No external database server required
+- **Single file**: Easy backup, transport, and archival
+- **Tamper detection**: SHA256 checksums on every record
+- **Long-term retention**: Query logs from months/years ago
+- **No dependencies**: Pure Go implementation, no CGO required
+
+### Query Audit Logs
+
+```bash
+# View recent logs
+storage-sage query -db audit.db -since 24h
+
+# Filter by action
+storage-sage query -db audit.db -action delete
+
+# Filter by error level
+storage-sage query -db audit.db -level error
+
+# Export as JSON
+storage-sage query -db audit.db -since 7d -json > report.json
+```
+
+### View Statistics
+
+```bash
+storage-sage stats -db audit.db
+# Output:
+# Audit Database Statistics
+# =========================
+# Total Records:     15432
+# First Record:      2024-01-01 00:00:00
+# Last Record:       2024-06-15 14:30:00
+# Files Deleted:     8921
+# Total Bytes Freed: 1.2 TB
+# Errors:            12
+```
+
+### Verify Integrity
+
+Detect any tampering with historical audit records:
+
+```bash
+storage-sage verify -db audit.db
+# PASS: All records verified. No tampering detected.
+```
+
+### Configuration File
+
+```yaml
+execution:
+  mode: execute
+  audit_path: /var/log/storage-sage.jsonl    # JSONL (optional)
+  audit_db_path: /var/lib/storage-sage/audit.db  # SQLite (recommended)
 ```
 
 ## Daemon Mode

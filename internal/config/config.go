@@ -50,10 +50,11 @@ type SafetyConfig struct {
 
 // ExecutionConfig configures execution behavior.
 type ExecutionConfig struct {
-	Mode      string        `yaml:"mode"` // "dry-run" or "execute"
-	Timeout   time.Duration `yaml:"timeout"`
-	AuditPath string        `yaml:"audit_path"`
-	MaxItems  int           `yaml:"max_items"`
+	Mode        string        `yaml:"mode"` // "dry-run" or "execute"
+	Timeout     time.Duration `yaml:"timeout"`
+	AuditPath   string        `yaml:"audit_path"`    // JSONL file path
+	AuditDBPath string        `yaml:"audit_db_path"` // SQLite database path
+	MaxItems    int           `yaml:"max_items"`
 }
 
 // LoggingConfig configures logging behavior.

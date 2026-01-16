@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -38,6 +39,7 @@ var (
 	maxDepth       = flag.Int("depth", -1, "max depth (-1 = use config default)")
 	minAgeDays     = flag.Int("min-age-days", -1, "minimum age in days (-1 = use config default)")
 	auditPath      = flag.String("audit", "", "audit log path (jsonl)")
+	auditDBPath    = flag.String("audit-db", "", "audit database path (sqlite)")
 	protectedPaths = flag.String("protected", "", "comma-separated additional protected paths")
 	allowDirDelete = flag.Bool("allow-dir-delete", false, "allow deletion of directories")
 	minSizeMB      = flag.Int("min-size-mb", -1, "minimum file size in MB (-1 = use config default)")
@@ -57,6 +59,21 @@ var (
 )
 
 func main() {
+	// Check for subcommands before parsing flags
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "query":
+			runQueryCmd(os.Args[2:])
+			return
+		case "stats":
+			runStatsCmd(os.Args[2:])
+			return
+		case "verify":
+			runVerifyCmd(os.Args[2:])
+			return
+		}
+	}
+
 	flag.Parse()
 
 	if *showVersion {
@@ -109,6 +126,225 @@ func main() {
 		log.Error("execution failed", logger.F("error", err.Error()))
 		os.Exit(1)
 	}
+}
+
+// runQueryCmd handles the "query" subcommand for reviewing audit logs.
+func runQueryCmd(args []string) {
+	fs := flag.NewFlagSet("query", flag.ExitOnError)
+	dbPath := fs.String("db", "", "audit database path (required)")
+	since := fs.String("since", "", "show records since (e.g., '24h', '7d', '2024-01-01')")
+	until := fs.String("until", "", "show records until (e.g., 'now', '2024-01-15')")
+	action := fs.String("action", "", "filter by action (plan, delete, error)")
+	level := fs.String("level", "", "filter by level (info, warn, error)")
+	path := fs.String("path", "", "filter by path (partial match)")
+	limit := fs.Int("limit", 100, "max records to return")
+	jsonOut := fs.Bool("json", false, "output as JSON")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: storage-sage query [options]\n\nQuery audit database for log review.\n\nOptions:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage query -db audit.db -since 24h\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage query -db audit.db -action delete -limit 50\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage query -db audit.db -level error -json\n")
+	}
+
+	fs.Parse(args)
+
+	if *dbPath == "" {
+		fmt.Fprintf(os.Stderr, "error: -db is required\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	sqlAud, err := auditor.NewSQLite(auditor.SQLiteConfig{Path: *dbPath})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer sqlAud.Close()
+
+	filter := auditor.QueryFilter{
+		Action: *action,
+		Level:  *level,
+		Path:   *path,
+		Limit:  *limit,
+	}
+
+	if *since != "" {
+		filter.Since = parseTimeArg(*since)
+	}
+	if *until != "" {
+		filter.Until = parseTimeArg(*until)
+	}
+
+	records, err := sqlAud.Query(context.Background(), filter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: query failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(records)
+	} else {
+		fmt.Printf("Found %d records:\n\n", len(records))
+		for _, r := range records {
+			fmt.Printf("[%s] %s %s", r.Timestamp.Format("2006-01-02 15:04:05"), r.Level, r.Action)
+			if r.Path != "" {
+				fmt.Printf(" %s", r.Path)
+			}
+			if r.BytesFreed > 0 {
+				fmt.Printf(" (%s freed)", formatBytesHuman(r.BytesFreed))
+			}
+			if r.Error != "" {
+				fmt.Printf(" ERROR: %s", r.Error)
+			}
+			fmt.Println()
+		}
+	}
+}
+
+// runStatsCmd handles the "stats" subcommand for audit statistics.
+func runStatsCmd(args []string) {
+	fs := flag.NewFlagSet("stats", flag.ExitOnError)
+	dbPath := fs.String("db", "", "audit database path (required)")
+	jsonOut := fs.Bool("json", false, "output as JSON")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: storage-sage stats [options]\n\nShow audit database statistics.\n\nOptions:\n")
+		fs.PrintDefaults()
+	}
+
+	fs.Parse(args)
+
+	if *dbPath == "" {
+		fmt.Fprintf(os.Stderr, "error: -db is required\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	sqlAud, err := auditor.NewSQLite(auditor.SQLiteConfig{Path: *dbPath})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer sqlAud.Close()
+
+	stats, err := sqlAud.Stats(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: stats failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(stats)
+	} else {
+		fmt.Println("Audit Database Statistics")
+		fmt.Println("=========================")
+		fmt.Printf("Total Records:     %d\n", stats.TotalRecords)
+		fmt.Printf("First Record:      %s\n", stats.FirstRecord.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Last Record:       %s\n", stats.LastRecord.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Files Deleted:     %d\n", stats.FilesDeleted)
+		fmt.Printf("Total Bytes Freed: %s\n", formatBytesHuman(stats.TotalBytesFreed))
+		fmt.Printf("Errors:            %d\n", stats.Errors)
+	}
+}
+
+// runVerifyCmd handles the "verify" subcommand for integrity checking.
+func runVerifyCmd(args []string) {
+	fs := flag.NewFlagSet("verify", flag.ExitOnError)
+	dbPath := fs.String("db", "", "audit database path (required)")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: storage-sage verify [options]\n\nVerify audit database integrity (detect tampering).\n\nOptions:\n")
+		fs.PrintDefaults()
+	}
+
+	fs.Parse(args)
+
+	if *dbPath == "" {
+		fmt.Fprintf(os.Stderr, "error: -db is required\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	sqlAud, err := auditor.NewSQLite(auditor.SQLiteConfig{Path: *dbPath})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer sqlAud.Close()
+
+	tampered, err := sqlAud.VerifyIntegrity(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: verification failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(tampered) == 0 {
+		fmt.Println("PASS: All records verified. No tampering detected.")
+	} else {
+		fmt.Printf("FAIL: %d records have invalid checksums (possible tampering):\n", len(tampered))
+		for _, id := range tampered {
+			fmt.Printf("  - Record ID: %d\n", id)
+		}
+		os.Exit(1)
+	}
+}
+
+// parseTimeArg parses a time argument like "24h", "7d", or "2024-01-01"
+func parseTimeArg(s string) time.Time {
+	// Try duration format first (e.g., "24h", "7d")
+	if len(s) > 1 {
+		unit := s[len(s)-1]
+		numStr := s[:len(s)-1]
+		var multiplier time.Duration
+		switch unit {
+		case 'h':
+			multiplier = time.Hour
+		case 'd':
+			multiplier = 24 * time.Hour
+		case 'm':
+			multiplier = time.Minute
+		}
+		if multiplier > 0 {
+			if num, err := fmt.Sscanf(numStr, "%d", new(int)); err == nil && num > 0 {
+				var n int
+				fmt.Sscanf(numStr, "%d", &n)
+				return time.Now().Add(-time.Duration(n) * multiplier)
+			}
+		}
+	}
+
+	// Try RFC3339
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+
+	// Try date format
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t
+	}
+
+	return time.Time{}
+}
+
+// formatBytesHuman formats bytes in human-readable format
+func formatBytesHuman(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
 // runDaemon starts storage-sage in daemon mode.
@@ -283,6 +519,9 @@ func mergeFlags(cfg *config.Config) {
 	if flagSet["audit"] {
 		cfg.Execution.AuditPath = *auditPath
 	}
+	if flagSet["audit-db"] {
+		cfg.Execution.AuditDBPath = *auditDBPath
+	}
 
 	// Merge protected paths (append, don't replace)
 	if flagSet["protected"] && *protectedPaths != "" {
@@ -433,20 +672,47 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 
 	runMode := core.Mode(cfg.Execution.Mode)
 
-	// Auditor (optional)
+	// Auditor (optional) - supports both JSONL and SQLite
 	var aud core.Auditor
+	var auditors []core.Auditor
+
+	// JSONL auditor
 	if cfg.Execution.AuditPath != "" {
 		a, aerr := auditor.NewJSONL(cfg.Execution.AuditPath)
 		if aerr != nil {
-			return fmt.Errorf("audit init failed: %w", aerr)
+			return fmt.Errorf("audit jsonl init failed: %w", aerr)
 		}
-		aud = a
+		auditors = append(auditors, a)
 		defer func() {
 			if err := a.Err(); err != nil {
 				log.Warn("audit write error", logger.F("error", err.Error()))
 			}
 			_ = a.Close()
 		}()
+	}
+
+	// SQLite auditor (for long-term storage)
+	if cfg.Execution.AuditDBPath != "" {
+		sqlAud, err := auditor.NewSQLite(auditor.SQLiteConfig{
+			Path: cfg.Execution.AuditDBPath,
+		})
+		if err != nil {
+			return fmt.Errorf("audit sqlite init failed: %w", err)
+		}
+		auditors = append(auditors, sqlAud)
+		log.Info("sqlite audit enabled", logger.F("path", cfg.Execution.AuditDBPath))
+		defer func() {
+			if err := sqlAud.Close(); err != nil {
+				log.Warn("audit db close error", logger.F("error", err.Error()))
+			}
+		}()
+	}
+
+	// Combine auditors if multiple configured
+	if len(auditors) == 1 {
+		aud = auditors[0]
+	} else if len(auditors) > 1 {
+		aud = auditor.NewMulti(auditors...)
 	}
 
 	// Components with logger and metrics injection
