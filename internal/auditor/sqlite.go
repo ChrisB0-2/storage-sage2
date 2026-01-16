@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // SQLite driver registration
 
 	"github.com/ChrisB0-2/storage-sage/internal/core"
 )
@@ -346,7 +346,9 @@ func (a *SQLiteAuditor) Stats(ctx context.Context) (*AuditStats, error) {
 
 	// Date range
 	var firstTS, lastTS sql.NullString
-	a.db.QueryRowContext(ctx, "SELECT MIN(timestamp), MAX(timestamp) FROM audit_log").Scan(&firstTS, &lastTS)
+	if err := a.db.QueryRowContext(ctx, "SELECT MIN(timestamp), MAX(timestamp) FROM audit_log").Scan(&firstTS, &lastTS); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
 	if firstTS.Valid {
 		stats.FirstRecord, _ = time.Parse(time.RFC3339Nano, firstTS.String)
 	}
@@ -356,14 +358,20 @@ func (a *SQLiteAuditor) Stats(ctx context.Context) (*AuditStats, error) {
 
 	// Total bytes freed
 	var totalBytes sql.NullInt64
-	a.db.QueryRowContext(ctx, "SELECT SUM(bytes_freed) FROM audit_log WHERE action = 'delete'").Scan(&totalBytes)
+	if err := a.db.QueryRowContext(ctx, "SELECT SUM(bytes_freed) FROM audit_log WHERE action = 'delete'").Scan(&totalBytes); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
 	stats.TotalBytesFreed = totalBytes.Int64
 
 	// Files deleted
-	a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'delete'").Scan(&stats.FilesDeleted)
+	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'delete'").Scan(&stats.FilesDeleted); err != nil {
+		return nil, err
+	}
 
 	// Errors
-	a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE level = 'error'").Scan(&stats.Errors)
+	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE level = 'error'").Scan(&stats.Errors); err != nil {
+		return nil, err
+	}
 
 	return stats, nil
 }

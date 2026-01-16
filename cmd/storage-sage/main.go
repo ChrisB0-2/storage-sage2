@@ -149,7 +149,7 @@ func runQueryCmd(args []string) {
 		fmt.Fprintf(os.Stderr, "  storage-sage query -db audit.db -level error -json\n")
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *dbPath == "" {
 		fmt.Fprintf(os.Stderr, "error: -db is required\n")
@@ -187,7 +187,7 @@ func runQueryCmd(args []string) {
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		enc.Encode(records)
+		_ = enc.Encode(records)
 	} else {
 		fmt.Printf("Found %d records:\n\n", len(records))
 		for _, r := range records {
@@ -217,7 +217,7 @@ func runStatsCmd(args []string) {
 		fs.PrintDefaults()
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *dbPath == "" {
 		fmt.Fprintf(os.Stderr, "error: -db is required\n")
