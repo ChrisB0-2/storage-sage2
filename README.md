@@ -326,6 +326,89 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
+## Loki Log Aggregation
+
+Storage-Sage can ship logs to Grafana Loki for centralized log aggregation. Logs are sent to both the console/file output AND Loki asynchronously.
+
+### Enabling Loki
+
+```bash
+# Basic usage - ship logs to local Loki
+storage-sage -root /tmp -loki -loki-url http://localhost:3100
+
+# With daemon mode
+storage-sage -daemon -schedule 1h -root /tmp -loki -loki-url http://loki.example.com:3100
+```
+
+### CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-loki` | `false` | Enable Loki log shipping |
+| `-loki-url` | `http://localhost:3100` | Loki server URL |
+
+### Configuration File
+
+Loki settings can be specified in the YAML configuration file for more control:
+
+```yaml
+logging:
+  level: info
+  format: json
+  loki:
+    enabled: true
+    url: "http://localhost:3100"
+    batch_size: 100           # Number of entries before flush
+    batch_wait: 5s            # Max time before flush
+    tenant_id: "my-tenant"    # X-Scope-OrgID header (optional)
+    labels:
+      service: storage-sage
+      environment: production
+```
+
+### How It Works
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────┐
+│  Application    │────▶│   LokiLogger    │────▶│    Loki     │
+│                 │     │   (decorator)   │     │   Server    │
+│  log.Info(...)  │     │                 │     │             │
+└─────────────────┘     │  ┌───────────┐  │     └─────────────┘
+                        │  │ Base Log  │──┼────▶ Console/File
+                        │  └───────────┘  │
+                        │  ┌───────────┐  │
+                        │  │  Batcher  │──┼────▶ HTTP POST
+                        │  └───────────┘  │     /loki/api/v1/push
+                        └─────────────────┘
+```
+
+- **Non-blocking**: Logs are batched and sent asynchronously
+- **Dual output**: Console/file logging continues to work normally
+- **Batching**: Logs are batched by count (`batch_size`) or time (`batch_wait`)
+- **Graceful shutdown**: Pending logs are flushed on exit
+
+### Querying Logs
+
+```bash
+# Query logs via Loki API
+curl -G -s "http://localhost:3100/loki/api/v1/query" \
+  --data-urlencode 'query={service="storage-sage"}'
+
+# Filter by log level
+curl -G -s "http://localhost:3100/loki/api/v1/query" \
+  --data-urlencode 'query={service="storage-sage",level="error"}'
+```
+
+### Running Loki Locally
+
+```bash
+# Start Loki with Docker
+docker run -d --name loki -p 3100:3100 grafana/loki:latest
+
+# Test with storage-sage
+storage-sage -root /tmp -loki -loki-url http://localhost:3100
+```
+
 ## Architecture
 
 ```
@@ -373,6 +456,7 @@ internal/
 
   logger/
     logger.go          # Structured JSON logging
+    loki.go            # Loki log shipping
 ```
 
 ## Use Cases

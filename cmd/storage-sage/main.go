@@ -48,6 +48,10 @@ var (
 	daemonMode = flag.Bool("daemon", false, "run as long-running daemon")
 	schedule   = flag.String("schedule", "", "run schedule (e.g., '1h', '30m', '@every 6h')")
 	daemonAddr = flag.String("daemon-addr", ":8080", "daemon health endpoint address")
+
+	// Loki flags
+	enableLoki = flag.Bool("loki", false, "enable Loki log shipping")
+	lokiURL    = flag.String("loki-url", "", "Loki server URL (default http://localhost:3100)")
 )
 
 func main() {
@@ -75,10 +79,13 @@ func main() {
 	}
 
 	// 4. Initialize logger from config
-	log, err := initLogger(cfg.Logging)
+	log, lokiCleanup, err := initLogger(cfg.Logging)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to initialize logger: %v\n", err)
 		os.Exit(1)
+	}
+	if lokiCleanup != nil {
+		defer lokiCleanup()
 	}
 
 	log.Info("storage-sage starting",
@@ -265,10 +272,25 @@ func mergeFlags(cfg *config.Config) {
 	if flagSet["metrics-addr"] && *metricsAddr != "" {
 		cfg.Daemon.MetricsAddr = *metricsAddr
 	}
+
+	// Merge Loki flags
+	if flagSet["loki"] {
+		if cfg.Logging.Loki == nil {
+			cfg.Logging.Loki = &config.LokiConfig{}
+		}
+		cfg.Logging.Loki.Enabled = *enableLoki
+	}
+	if flagSet["loki-url"] && *lokiURL != "" {
+		if cfg.Logging.Loki == nil {
+			cfg.Logging.Loki = &config.LokiConfig{}
+		}
+		cfg.Logging.Loki.URL = *lokiURL
+	}
 }
 
 // initLogger creates a logger based on configuration.
-func initLogger(cfg config.LoggingConfig) (logger.Logger, error) {
+// Returns the logger and an optional cleanup function for Loki.
+func initLogger(cfg config.LoggingConfig) (logger.Logger, func(), error) {
 	level, err := logger.ParseLevel(cfg.Level)
 	if err != nil {
 		level = logger.LevelInfo
@@ -284,12 +306,34 @@ func initLogger(cfg config.LoggingConfig) (logger.Logger, error) {
 		// File output
 		f, err := os.OpenFile(cfg.Output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open log file: %w", err)
+			return nil, nil, fmt.Errorf("failed to open log file: %w", err)
 		}
 		output = f
 	}
 
-	return logger.New(level, output), nil
+	baseLog := logger.New(level, output)
+
+	// Wrap with Loki if enabled
+	if cfg.Loki != nil && cfg.Loki.Enabled {
+		lokiCfg := logger.LokiConfig{
+			URL:       cfg.Loki.URL,
+			BatchSize: cfg.Loki.BatchSize,
+			BatchWait: cfg.Loki.BatchWait,
+			Labels:    cfg.Loki.Labels,
+			TenantID:  cfg.Loki.TenantID,
+		}
+		lokiLog := logger.NewLokiLogger(baseLog, lokiCfg)
+
+		cleanup := func() {
+			if err := lokiLog.Close(); err != nil {
+				baseLog.Warn("loki shutdown error", logger.F("error", err.Error()))
+			}
+		}
+
+		return lokiLog, cleanup, nil
+	}
+
+	return baseLog, nil, nil
 }
 
 // run executes storage-sage in one-shot mode (manages its own metrics lifecycle).

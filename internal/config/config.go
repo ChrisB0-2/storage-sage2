@@ -56,9 +56,20 @@ type ExecutionConfig struct {
 
 // LoggingConfig configures logging behavior.
 type LoggingConfig struct {
-	Level  string `yaml:"level"`  // "debug", "info", "warn", "error"
-	Format string `yaml:"format"` // "json" or "text"
-	Output string `yaml:"output"` // "stderr", "stdout", or file path
+	Level  string      `yaml:"level"`  // "debug", "info", "warn", "error"
+	Format string      `yaml:"format"` // "json" or "text"
+	Output string      `yaml:"output"` // "stderr", "stdout", or file path
+	Loki   *LokiConfig `yaml:"loki,omitempty"`
+}
+
+// LokiConfig configures Loki log shipping.
+type LokiConfig struct {
+	Enabled   bool              `yaml:"enabled"`
+	URL       string            `yaml:"url"`        // e.g., http://localhost:3100
+	BatchSize int               `yaml:"batch_size"` // Number of log entries before flush
+	BatchWait time.Duration     `yaml:"batch_wait"` // Max time before flush
+	Labels    map[string]string `yaml:"labels"`     // Static labels for all log streams
+	TenantID  string            `yaml:"tenant_id"`  // X-Scope-OrgID header for multi-tenancy
 }
 
 // DaemonConfig configures daemon mode.
@@ -111,6 +122,16 @@ func Default() *Config {
 			Level:  "info",
 			Format: "json",
 			Output: "stderr",
+			Loki: &LokiConfig{
+				Enabled:   false,
+				URL:       "http://localhost:3100",
+				BatchSize: 100,
+				BatchWait: 5 * time.Second,
+				Labels: map[string]string{
+					"service": "storage-sage",
+				},
+				TenantID: "",
+			},
 		},
 		Daemon: DaemonConfig{
 			Enabled:     false,

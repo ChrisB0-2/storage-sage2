@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -223,6 +224,58 @@ func ValidateLogging(log LoggingConfig) []ValidationError {
 		errs = append(errs, ValidationError{
 			Field:   "logging.format",
 			Message: fmt.Sprintf("must be one of %v, got %q", ValidLogFormats, log.Format),
+		})
+	}
+
+	// Validate Loki config if present
+	if log.Loki != nil {
+		errs = append(errs, ValidateLoki(*log.Loki)...)
+	}
+
+	return errs
+}
+
+// ValidateLoki checks Loki configuration.
+func ValidateLoki(loki LokiConfig) []ValidationError {
+	var errs []ValidationError
+
+	// If Loki is enabled, URL must be provided and valid
+	if loki.Enabled {
+		if loki.URL == "" {
+			errs = append(errs, ValidationError{
+				Field:   "logging.loki.url",
+				Message: "URL is required when Loki is enabled",
+			})
+		} else {
+			// Validate URL format
+			u, err := url.Parse(loki.URL)
+			if err != nil {
+				errs = append(errs, ValidationError{
+					Field:   "logging.loki.url",
+					Message: fmt.Sprintf("invalid URL: %v", err),
+				})
+			} else if u.Scheme != "http" && u.Scheme != "https" {
+				errs = append(errs, ValidationError{
+					Field:   "logging.loki.url",
+					Message: fmt.Sprintf("URL scheme must be http or https, got %q", u.Scheme),
+				})
+			}
+		}
+	}
+
+	// BatchSize must be positive if set
+	if loki.BatchSize < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "logging.loki.batch_size",
+			Message: "must be >= 0",
+		})
+	}
+
+	// BatchWait must be positive if set
+	if loki.BatchWait < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "logging.loki.batch_wait",
+			Message: "must be >= 0",
 		})
 	}
 
