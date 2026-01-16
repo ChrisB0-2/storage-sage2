@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ValidationError contains details about a single validation failure.
@@ -59,6 +61,7 @@ func Validate(cfg *Config) error {
 	errs = append(errs, ValidateSafety(cfg.Safety)...)
 	errs = append(errs, ValidateExecution(cfg.Execution)...)
 	errs = append(errs, ValidateLogging(cfg.Logging)...)
+	errs = append(errs, ValidateDaemon(cfg.Daemon)...)
 
 	if len(errs) > 0 {
 		return errs
@@ -224,6 +227,62 @@ func ValidateLogging(log LoggingConfig) []ValidationError {
 	}
 
 	return errs
+}
+
+// ValidateDaemon checks daemon configuration.
+func ValidateDaemon(d DaemonConfig) []ValidationError {
+	var errs []ValidationError
+
+	// If daemon is enabled, validate its settings
+	if d.Enabled {
+		// Schedule must be provided when daemon is enabled
+		if d.Schedule == "" {
+			errs = append(errs, ValidationError{
+				Field:   "daemon.schedule",
+				Message: "schedule is required when daemon mode is enabled",
+			})
+		} else {
+			// Validate schedule is parseable
+			if _, err := parseSchedule(d.Schedule); err != nil {
+				errs = append(errs, ValidationError{
+					Field:   "daemon.schedule",
+					Message: fmt.Sprintf("invalid schedule %q: %v", d.Schedule, err),
+				})
+			}
+		}
+	}
+
+	// Validate HTTP address format if provided
+	if d.HTTPAddr != "" {
+		if _, _, err := net.SplitHostPort(d.HTTPAddr); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "daemon.http_addr",
+				Message: fmt.Sprintf("invalid address %q: %v", d.HTTPAddr, err),
+			})
+		}
+	}
+
+	// Validate metrics address format if provided
+	if d.MetricsAddr != "" {
+		if _, _, err := net.SplitHostPort(d.MetricsAddr); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "daemon.metrics_addr",
+				Message: fmt.Sprintf("invalid address %q: %v", d.MetricsAddr, err),
+			})
+		}
+	}
+
+	return errs
+}
+
+// parseSchedule parses a simple schedule string into a duration.
+// Supports: "1h", "30m", "6h", etc. or cron-like "@every 1h".
+func parseSchedule(s string) (time.Duration, error) {
+	// Handle @every syntax
+	if len(s) > 7 && s[:7] == "@every " {
+		s = s[7:]
+	}
+	return time.ParseDuration(s)
 }
 
 // contains checks if a string slice contains a value.

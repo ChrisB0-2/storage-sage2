@@ -14,6 +14,7 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/auditor"
 	"github.com/ChrisB0-2/storage-sage/internal/config"
 	"github.com/ChrisB0-2/storage-sage/internal/core"
+	"github.com/ChrisB0-2/storage-sage/internal/daemon"
 	"github.com/ChrisB0-2/storage-sage/internal/executor"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 	"github.com/ChrisB0-2/storage-sage/internal/metrics"
@@ -42,6 +43,11 @@ var (
 	extensions     = flag.String("extensions", "", "comma-separated extensions to match")
 	enableMetrics  = flag.Bool("metrics", false, "enable Prometheus metrics endpoint")
 	metricsAddr    = flag.String("metrics-addr", "", "metrics server address (default :9090)")
+
+	// Daemon mode flags
+	daemonMode = flag.Bool("daemon", false, "run as long-running daemon")
+	schedule   = flag.String("schedule", "", "run schedule (e.g., '1h', '30m', '@every 6h')")
+	daemonAddr = flag.String("daemon-addr", ":8080", "daemon health endpoint address")
 )
 
 func main() {
@@ -80,11 +86,53 @@ func main() {
 		logger.F("roots", cfg.Scan.Roots),
 	)
 
-	// 5. Run main logic with logger-aware components
+	// 5. Check for daemon mode
+	if *daemonMode {
+		if err := runDaemon(cfg, log); err != nil {
+			log.Error("daemon failed", logger.F("error", err.Error()))
+			os.Exit(1)
+		}
+		return
+	}
+
+	// 6. Run main logic with logger-aware components (one-shot mode)
 	if err := run(cfg, log); err != nil {
 		log.Error("execution failed", logger.F("error", err.Error()))
 		os.Exit(1)
 	}
+}
+
+// runDaemon starts storage-sage in daemon mode.
+func runDaemon(cfg *config.Config, log logger.Logger) error {
+	// Get schedule from flag or config
+	sched := *schedule
+	if sched == "" {
+		sched = cfg.Daemon.Schedule
+	}
+	if sched == "" {
+		return fmt.Errorf("daemon mode requires -schedule flag or daemon.schedule in config")
+	}
+
+	// Get HTTP address from flag (already has default)
+	addr := *daemonAddr
+
+	log.Info("starting daemon mode",
+		logger.F("schedule", sched),
+		logger.F("http_addr", addr),
+	)
+
+	// Create the run function that executes a single cleanup cycle
+	runFunc := func(ctx context.Context) error {
+		return run(cfg, log)
+	}
+
+	// Create and run daemon
+	d := daemon.New(log, runFunc, daemon.Config{
+		Schedule: sched,
+		HTTPAddr: addr,
+	})
+
+	return d.Run(context.Background())
 }
 
 // loadConfig loads configuration from file or returns defaults.

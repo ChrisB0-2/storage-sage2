@@ -351,3 +351,131 @@ func TestValidationErrors_Empty(t *testing.T) {
 		t.Errorf("expected empty string for empty errors, got: %q", errs.Error())
 	}
 }
+
+func TestValidateDaemon_Disabled(t *testing.T) {
+	// When daemon is disabled, no validation errors should occur
+	d := DaemonConfig{Enabled: false}
+	errs := ValidateDaemon(d)
+	if len(errs) > 0 {
+		t.Errorf("expected no errors for disabled daemon, got: %v", errs)
+	}
+}
+
+func TestValidateDaemon_EnabledWithoutSchedule(t *testing.T) {
+	d := DaemonConfig{
+		Enabled:  true,
+		HTTPAddr: ":8080",
+		Schedule: "",
+	}
+	errs := ValidateDaemon(d)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error for missing schedule, got: %d", len(errs))
+	}
+	if errs[0].Field != "daemon.schedule" {
+		t.Errorf("expected field daemon.schedule, got: %s", errs[0].Field)
+	}
+}
+
+func TestValidateDaemon_EnabledWithValidSchedule(t *testing.T) {
+	schedules := []string{"1h", "30m", "6h", "@every 1h", "@every 30m"}
+	for _, s := range schedules {
+		d := DaemonConfig{
+			Enabled:  true,
+			HTTPAddr: ":8080",
+			Schedule: s,
+		}
+		errs := ValidateDaemon(d)
+		if len(errs) > 0 {
+			t.Errorf("expected no errors for schedule %q, got: %v", s, errs)
+		}
+	}
+}
+
+func TestValidateDaemon_InvalidSchedule(t *testing.T) {
+	d := DaemonConfig{
+		Enabled:  true,
+		HTTPAddr: ":8080",
+		Schedule: "invalid",
+	}
+	errs := ValidateDaemon(d)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error for invalid schedule, got: %d", len(errs))
+	}
+	if !strings.Contains(errs[0].Message, "invalid") {
+		t.Errorf("expected error message to mention invalid, got: %s", errs[0].Message)
+	}
+}
+
+func TestValidateDaemon_InvalidHTTPAddr(t *testing.T) {
+	d := DaemonConfig{
+		Enabled:  false,
+		HTTPAddr: "not-an-address",
+	}
+	errs := ValidateDaemon(d)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error for invalid HTTP addr, got: %d", len(errs))
+	}
+	if errs[0].Field != "daemon.http_addr" {
+		t.Errorf("expected field daemon.http_addr, got: %s", errs[0].Field)
+	}
+}
+
+func TestValidateDaemon_InvalidMetricsAddr(t *testing.T) {
+	d := DaemonConfig{
+		Enabled:     false,
+		MetricsAddr: "bad-addr",
+	}
+	errs := ValidateDaemon(d)
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error for invalid metrics addr, got: %d", len(errs))
+	}
+	if errs[0].Field != "daemon.metrics_addr" {
+		t.Errorf("expected field daemon.metrics_addr, got: %s", errs[0].Field)
+	}
+}
+
+func TestValidateDaemon_ValidAddresses(t *testing.T) {
+	addrs := []string{":8080", "localhost:8080", "0.0.0.0:9090", "127.0.0.1:3000"}
+	for _, addr := range addrs {
+		d := DaemonConfig{
+			HTTPAddr:    addr,
+			MetricsAddr: addr,
+		}
+		errs := ValidateDaemon(d)
+		if len(errs) > 0 {
+			t.Errorf("expected no errors for address %q, got: %v", addr, errs)
+		}
+	}
+}
+
+func TestParseSchedule_Valid(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"1h", "1h0m0s"},
+		{"30m", "30m0s"},
+		{"@every 1h", "1h0m0s"},
+		{"@every 30m", "30m0s"},
+	}
+	for _, tc := range tests {
+		d, err := parseSchedule(tc.input)
+		if err != nil {
+			t.Errorf("parseSchedule(%q) error = %v", tc.input, err)
+			continue
+		}
+		if d.String() != tc.want {
+			t.Errorf("parseSchedule(%q) = %s, want %s", tc.input, d.String(), tc.want)
+		}
+	}
+}
+
+func TestParseSchedule_Invalid(t *testing.T) {
+	invalids := []string{"", "invalid", "1x", "@every"}
+	for _, s := range invalids {
+		_, err := parseSchedule(s)
+		if err == nil {
+			t.Errorf("parseSchedule(%q) expected error, got nil", s)
+		}
+	}
+}

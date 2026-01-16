@@ -22,7 +22,9 @@ Most cleanup tools are "delete first, regret later." Storage-Sage inverts this:
 - **Flexible policies**: Age, size, and extension-based filtering with composable rules
 - **Audit logging**: JSONL audit trail of all decisions and actions
 - **Dry-run mode**: Preview what would be deleted before executing
-- **Zero dependencies**: Pure Go standard library for maximum reliability
+- **Daemon mode**: Run as a long-running service with scheduled cleanup
+- **Prometheus metrics**: Built-in metrics endpoint for monitoring
+- **Zero dependencies**: Pure Go standard library for maximum reliability (plus optional Prometheus)
 
 ## Installation
 
@@ -141,6 +143,11 @@ Time-of-check-time-of-use attacks are prevented by re-running all safety checks 
 | `-protected` | | Additional protected paths (comma-separated) |
 | `-allow-dir-delete` | `false` | Allow deletion of directories |
 | `-audit` | | Path to JSONL audit log (empty = disabled) |
+| `-metrics` | `false` | Enable Prometheus metrics endpoint |
+| `-metrics-addr` | `:9090` | Prometheus metrics server address |
+| `-daemon` | `false` | Run as long-running daemon |
+| `-schedule` | | Cleanup schedule (e.g., `1h`, `30m`, `@every 6h`) |
+| `-daemon-addr` | `:8080` | Daemon HTTP endpoint address |
 
 ## Policy System
 
@@ -212,6 +219,113 @@ When `-audit` is specified, all decisions are logged in JSONL format:
 {"time":"2024-01-15T10:30:01Z","level":"info","action":"delete","path":"/data/old.log","fields":{"bytes_freed":1024,"reason":"deleted"}}
 ```
 
+## Daemon Mode
+
+Storage-Sage can run as a long-running daemon that performs scheduled cleanup operations. This is ideal for continuous maintenance of temporary directories, log files, and cache cleanup.
+
+### Starting Daemon Mode
+
+```bash
+# Run cleanup every hour
+storage-sage -daemon -schedule 1h -root /tmp -mode execute
+
+# Run cleanup every 6 hours with audit logging
+storage-sage -daemon -schedule 6h -root /data/cache -mode execute -audit /var/log/storage-sage.jsonl
+
+# Custom HTTP endpoint address
+storage-sage -daemon -schedule 30m -root /tmp -daemon-addr :9000
+```
+
+### Schedule Format
+
+The `-schedule` flag accepts Go duration format:
+
+- `1h` - Every hour
+- `30m` - Every 30 minutes
+- `6h` - Every 6 hours
+- `1h30m` - Every 1 hour 30 minutes
+- `@every 1h` - Alternative syntax (same as `1h`)
+
+### HTTP API
+
+The daemon exposes HTTP endpoints for monitoring and control:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Liveness check (always returns 200) |
+| `/ready` | GET | Readiness check (200 if ready/running, 503 otherwise) |
+| `/status` | GET | Detailed status with last run info, run count, schedule |
+| `/trigger` | POST | Manually trigger a cleanup run |
+
+### Example API Usage
+
+```bash
+# Check if daemon is healthy
+curl http://localhost:8080/health
+# {"status":"ok","state":"ready"}
+
+# Check if daemon is ready to accept work
+curl http://localhost:8080/ready
+# {"ready":true,"state":"ready"}
+
+# Get detailed status
+curl http://localhost:8080/status
+# {"state":"ready","running":false,"last_run":"2024-01-15T10:30:00Z","last_error":"","run_count":5,"schedule":"1h"}
+
+# Manually trigger a cleanup
+curl -X POST http://localhost:8080/trigger
+# {"triggered":true}
+```
+
+### Configuration File
+
+Daemon settings can also be specified in the YAML configuration file:
+
+```yaml
+daemon:
+  enabled: true
+  http_addr: ":8080"
+  metrics_addr: ":9090"
+  schedule: "6h"
+
+scan:
+  roots:
+    - /tmp
+    - /var/cache
+
+execution:
+  mode: execute
+  audit_path: /var/log/storage-sage.jsonl
+```
+
+### Graceful Shutdown
+
+The daemon handles `SIGINT` and `SIGTERM` signals for graceful shutdown:
+
+- Stops accepting new scheduled runs
+- Waits for any in-progress cleanup to complete
+- Shuts down HTTP server cleanly
+- Exits with code 0
+
+### Running as a System Service
+
+Example systemd unit file (`/etc/systemd/system/storage-sage.service`):
+
+```ini
+[Unit]
+Description=Storage-Sage Cleanup Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/storage-sage -daemon -schedule 6h -root /tmp -mode execute
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
 ## Architecture
 
 ```
@@ -245,6 +359,20 @@ internal/
   auditor/
     jsonl.go           # JSONL audit logger
     ndjson.go          # NDJSON audit logger
+
+  daemon/
+    daemon.go          # Long-running daemon with scheduling and HTTP API
+
+  metrics/
+    prometheus.go      # Prometheus metrics collection
+    server.go          # Metrics HTTP server
+
+  config/
+    config.go          # YAML configuration loading
+    validate.go        # Configuration validation
+
+  logger/
+    logger.go          # Structured JSON logging
 ```
 
 ## Use Cases
