@@ -36,6 +36,7 @@ type PolicyConfig struct {
 	MinAgeDays    int      `yaml:"min_age_days"`
 	MinSizeMB     int      `yaml:"min_size_mb"`
 	Extensions    []string `yaml:"extensions"`
+	Exclusions    []string `yaml:"exclusions"`     // glob patterns to exclude from deletion
 	CompositeMode string   `yaml:"composite_mode"` // "and" or "or"
 }
 
@@ -102,6 +103,7 @@ func Default() *Config {
 			MinAgeDays:    30,
 			MinSizeMB:     0,
 			Extensions:    []string{},
+			Exclusions:    []string{},
 			CompositeMode: "and",
 		},
 		Safety: SafetyConfig{

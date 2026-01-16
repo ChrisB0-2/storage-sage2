@@ -138,6 +138,7 @@ Time-of-check-time-of-use attacks are prevented by re-running all safety checks 
 | `-min-age-days` | `30` | Minimum file age in days to consider for cleanup |
 | `-min-size-mb` | `0` | Minimum file size in MB (0 = disabled) |
 | `-extensions` | | Comma-separated extensions to match (e.g., `.tmp,.log`) |
+| `-exclude` | | Comma-separated glob patterns to exclude (e.g., `*.important,keep-*`) |
 | `-depth` | `0` | Max traversal depth (0 = unlimited) |
 | `-max` | `25` | Max plan items to display in output |
 | `-protected` | | Additional protected paths (comma-separated) |
@@ -165,15 +166,36 @@ When `-min-size-mb` is set, files must also meet the size threshold.
 
 When `-extensions` is set, files must have one of the specified extensions.
 
+### Exclusion Policy (Optional)
+
+When `-exclude` is set, files matching any exclusion pattern are **never deleted**, regardless of other policy matches. Patterns use glob syntax:
+
+```bash
+# Exclude specific extensions
+storage-sage -root /tmp -exclude "*.important,*.keep"
+
+# Exclude files with prefix
+storage-sage -root /data -exclude "keep-*,backup-*"
+
+# Exclude entire directories (recursive)
+storage-sage -root /project -exclude "node_modules/**,.git/**"
+```
+
+**Supported patterns:**
+- `*` - Match any characters in filename (e.g., `*.bak`, `keep-*`)
+- `?` - Match single character (e.g., `log?.txt`)
+- `[...]` - Character class (e.g., `[0-9]*.log`)
+- `dir/**` - Match all files under directory recursively
+
 ### How Policies Combine
 
 Policies combine with **AND** logic:
 
 ```
-Eligible = Age OK AND (Size OK OR Extension OK)
+Eligible = Age OK AND (Size OK OR Extension OK) AND NOT Excluded
 ```
 
-A file must always be old enough, AND if you've specified size or extension filters, it must match at least one of those too.
+A file must always be old enough, AND if you've specified size or extension filters, it must match at least one of those too. Files matching any exclusion pattern are always protected.
 
 ## Scoring System
 
@@ -292,6 +314,15 @@ scan:
   roots:
     - /tmp
     - /var/cache
+
+policy:
+  min_age_days: 30
+  min_size_mb: 0
+  extensions: []
+  exclusions:
+    - "*.important"
+    - "keep-*"
+    - ".git/**"
 
 execution:
   mode: execute

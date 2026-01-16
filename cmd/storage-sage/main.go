@@ -41,6 +41,7 @@ var (
 	allowDirDelete = flag.Bool("allow-dir-delete", false, "allow deletion of directories")
 	minSizeMB      = flag.Int("min-size-mb", -1, "minimum file size in MB (-1 = use config default)")
 	extensions     = flag.String("extensions", "", "comma-separated extensions to match")
+	exclusions     = flag.String("exclude", "", "comma-separated glob patterns to exclude (e.g., '*.important,keep-*')")
 	enableMetrics  = flag.Bool("metrics", false, "enable Prometheus metrics endpoint")
 	metricsAddr    = flag.String("metrics-addr", "", "metrics server address (default :9090)")
 
@@ -265,6 +266,17 @@ func mergeFlags(cfg *config.Config) {
 		cfg.Policy.Extensions = exts
 	}
 
+	// Merge exclusions
+	if flagSet["exclude"] && *exclusions != "" {
+		var excl []string
+		for _, e := range strings.Split(*exclusions, ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				excl = append(excl, e)
+			}
+		}
+		cfg.Policy.Exclusions = excl
+	}
+
 	// Merge metrics flags
 	if flagSet["metrics"] {
 		cfg.Metrics.Enabled = *enableMetrics
@@ -412,6 +424,13 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 	if len(additionalPolicies) > 0 {
 		allPolicies := append([]core.Policy{pol}, additionalPolicies...)
 		pol = policy.NewCompositePolicy(policy.ModeAnd, allPolicies...)
+	}
+
+	// Add exclusion policy (must NOT match any exclusion pattern)
+	if len(cfg.Policy.Exclusions) > 0 {
+		exclusionPolicy := policy.NewExclusionPolicy(cfg.Policy.Exclusions)
+		pol = policy.NewCompositePolicy(policy.ModeAnd, pol, exclusionPolicy)
+		log.Debug("exclusion patterns active", logger.F("patterns", cfg.Policy.Exclusions))
 	}
 
 	// Environment snapshot
