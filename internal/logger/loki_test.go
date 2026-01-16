@@ -270,7 +270,11 @@ func TestLokiLogger_TenantHeader(t *testing.T) {
 func TestLokiLogger_HandlesServerError(t *testing.T) {
 	var errorLogged atomic.Bool
 	var buf strings.Builder
-	base := New(LevelError, &buf)
+	var bufMu sync.Mutex
+
+	// Create a thread-safe writer wrapper
+	safeWriter := &syncWriter{w: &buf, mu: &bufMu}
+	base := New(LevelError, safeWriter)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -287,7 +291,10 @@ func TestLokiLogger_HandlesServerError(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	loki.Close()
 
+	bufMu.Lock()
 	output := buf.String()
+	bufMu.Unlock()
+
 	if strings.Contains(output, "loki") && strings.Contains(output, "error") {
 		errorLogged.Store(true)
 	}
@@ -298,6 +305,18 @@ func TestLokiLogger_HandlesServerError(t *testing.T) {
 		// The important thing is it doesn't panic
 		t.Log("Server error handling passed (no panic)")
 	}
+}
+
+// syncWriter wraps an io.Writer with mutex synchronization
+type syncWriter struct {
+	w  io.Writer
+	mu *sync.Mutex
+}
+
+func (sw *syncWriter) Write(p []byte) (n int, err error) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	return sw.w.Write(p)
 }
 
 func TestLokiConfig_Defaults(t *testing.T) {
