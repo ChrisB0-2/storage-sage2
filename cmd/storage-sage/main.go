@@ -477,6 +477,8 @@ func loadConfig(path string) (*config.Config, error) {
 
 // mergeFlags applies CLI flag values over config values.
 // CLI flags take precedence (only if explicitly set).
+//
+//nolint:gocyclo // Flag merging is repetitive but straightforward; splitting would obscure logic
 func mergeFlags(cfg *config.Config) {
 	// Helper to check if a flag was explicitly set
 	flagSet := make(map[string]bool)
@@ -665,6 +667,8 @@ func run(cfg *config.Config, log logger.Logger) error {
 }
 
 // runCore executes the main storage-sage cleanup logic with provided metrics.
+//
+//nolint:gocyclo // Main orchestration function; complexity reflects feature breadth
 func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Execution.Timeout)
 	defer cancel()

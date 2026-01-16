@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -167,6 +169,35 @@ jobs:
           name: binaries
           path: dist/
 
+      - name: Verify release artifacts
+        run: |
+          echo "Verifying release artifacts..."
+          ls -la dist/
+
+          # Verify all expected binaries exist
+          expected_binaries=(
+            "storage-sage-linux-amd64"
+            "storage-sage-linux-arm64"
+            "storage-sage-darwin-amd64"
+            "storage-sage-darwin-arm64"
+            "storage-sage-windows-amd64.exe"
+            "SHA256SUMS"
+          )
+
+          for binary in "${expected_binaries[@]}"; do
+            if [ ! -f "dist/${binary}" ]; then
+              echo "ERROR: Missing expected artifact: ${binary}"
+              exit 1
+            fi
+            echo "OK: ${binary}"
+          done
+
+          # Verify checksums
+          echo ""
+          echo "Verifying checksums..."
+          cd dist && sha256sum -c SHA256SUMS
+          echo "All checksums verified successfully"
+
       - name: Generate changelog
         id: changelog
         run: |
@@ -194,7 +225,8 @@ jobs:
             dist/storage-sage-*
             dist/SHA256SUMS
           body_path: CHANGELOG.md
-          draft: false
+          # Create draft for release candidates to allow review before publishing
+          draft: ${{ contains(steps.version.outputs.VERSION, '-rc') }}
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

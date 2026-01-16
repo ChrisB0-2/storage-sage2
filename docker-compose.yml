@@ -29,6 +29,14 @@ services:
       - monitoring
     depends_on:
       - loki
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
 
   prometheus:
     image: prom/prometheus:v2.48.0
@@ -46,14 +54,24 @@ services:
       - "9090:9090"
     networks:
       - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
 
   grafana:
     image: grafana/grafana:10.2.0
     container_name: grafana
     restart: unless-stopped
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Use environment variables for credentials - set via .env file or shell
+      # NEVER commit actual credentials to source control
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -66,6 +84,14 @@ services:
     depends_on:
       - prometheus
       - loki
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
   loki:
     image: grafana/loki:2.9.0
@@ -76,6 +102,14 @@ services:
       - "3100:3100"
     networks:
       - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
 
 volumes:
   prometheus_data:

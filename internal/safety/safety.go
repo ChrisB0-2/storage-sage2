@@ -27,6 +27,7 @@ func NewWithLogger(log logger.Logger) *Engine {
 	return &Engine{log: log}
 }
 
+//nolint:gocyclo // Safety validation requires comprehensive checks; refactoring would reduce clarity
 func (e *Engine) Validate(_ context.Context, cand core.Candidate, cfg core.SafetyConfig) core.SafetyVerdict {
 	// Normalize candidate path.
 	candPath := filepath.Clean(cand.Path)

@@ -51,6 +51,8 @@ func NewWalkDirWithMetrics(log logger.Logger, m core.Metrics) *WalkDirScanner {
 }
 
 // Scan walks each root and emits Candidates. It never deletes.
+//
+//nolint:gocyclo // Filesystem walking has inherent complexity; splitting would hurt readability
 func (s *WalkDirScanner) Scan(ctx context.Context, req core.ScanRequest) (<-chan core.Candidate, <-chan error) {
 	out := make(chan core.Candidate, 128)
 	errc := make(chan error, 1)

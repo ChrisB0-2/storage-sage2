@@ -44,6 +44,11 @@ USER storagesage
 # 9090 - Prometheus metrics
 EXPOSE 8080 9090
 
+# Health check for container orchestration
+# Checks the daemon health endpoint every 30s
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+
 # Default entrypoint
 ENTRYPOINT ["/usr/local/bin/storage-sage"]
 

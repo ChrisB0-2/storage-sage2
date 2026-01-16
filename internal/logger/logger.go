@@ -19,6 +19,7 @@ const (
 	LevelError
 )
 
+//nolint:goconst // Level string values are self-documenting in context
 func (l Level) String() string {
 	switch l {
 	case LevelDebug:
