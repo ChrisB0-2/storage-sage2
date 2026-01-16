@@ -121,9 +121,38 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		logger.F("http_addr", addr),
 	)
 
+	// Initialize metrics (Prometheus or Noop) - persistent for daemon lifetime
+	var m core.Metrics
+	var metricsServer *metrics.Server
+	if cfg.Metrics.Enabled {
+		m = metrics.NewPrometheus(nil)
+		metricsServer = metrics.NewServer(cfg.Daemon.MetricsAddr)
+
+		// Start metrics server in background (runs for daemon lifetime)
+		go func() {
+			log.Info("metrics server starting", logger.F("addr", metricsServer.Addr()))
+			if err := metricsServer.Start(); err != nil {
+				log.Error("metrics server error", logger.F("error", err.Error()))
+			}
+		}()
+
+		// Shutdown metrics server when daemon exits
+		defer func() {
+			log.Info("metrics server stopping")
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+				log.Warn("metrics server shutdown error", logger.F("error", err.Error()))
+			}
+		}()
+	} else {
+		m = metrics.NewNoop()
+	}
+
 	// Create the run function that executes a single cleanup cycle
+	// Uses shared metrics instance for persistent metrics
 	runFunc := func(ctx context.Context) error {
-		return run(cfg, log)
+		return runCore(cfg, log, m)
 	}
 
 	// Create and run daemon
@@ -263,13 +292,8 @@ func initLogger(cfg config.LoggingConfig) (logger.Logger, error) {
 	return logger.New(level, output), nil
 }
 
-// run executes the main storage-sage logic.
+// run executes storage-sage in one-shot mode (manages its own metrics lifecycle).
 func run(cfg *config.Config, log logger.Logger) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Execution.Timeout)
-	defer cancel()
-
-	runMode := core.Mode(cfg.Execution.Mode)
-
 	// Initialize metrics (Prometheus or Noop)
 	var m core.Metrics
 	var metricsServer *metrics.Server
@@ -296,6 +320,16 @@ func run(cfg *config.Config, log logger.Logger) error {
 	} else {
 		m = metrics.NewNoop()
 	}
+
+	return runCore(cfg, log, m)
+}
+
+// runCore executes the main storage-sage cleanup logic with provided metrics.
+func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Execution.Timeout)
+	defer cancel()
+
+	runMode := core.Mode(cfg.Execution.Mode)
 
 	// Auditor (optional)
 	var aud core.Auditor
