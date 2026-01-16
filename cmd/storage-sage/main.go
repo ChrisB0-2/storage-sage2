@@ -18,6 +18,7 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/executor"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 	"github.com/ChrisB0-2/storage-sage/internal/metrics"
+	"github.com/ChrisB0-2/storage-sage/internal/notifier"
 	"github.com/ChrisB0-2/storage-sage/internal/planner"
 	"github.com/ChrisB0-2/storage-sage/internal/policy"
 	"github.com/ChrisB0-2/storage-sage/internal/safety"
@@ -157,10 +158,55 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		m = metrics.NewNoop()
 	}
 
+	// Initialize webhook notifier
+	notify := createNotifier(cfg.Notifications, log)
+
 	// Create the run function that executes a single cleanup cycle
 	// Uses shared metrics instance for persistent metrics
+	// Wraps with webhook notifications
 	runFunc := func(ctx context.Context) error {
-		return runCore(cfg, log, m)
+		startTime := time.Now()
+		rootStr := ""
+		if len(cfg.Scan.Roots) > 0 {
+			rootStr = cfg.Scan.Roots[0]
+		}
+
+		// Notify cleanup started
+		notify.Notify(ctx, notifier.WebhookPayload{
+			Event:     notifier.EventCleanupStarted,
+			Timestamp: startTime,
+			Message:   fmt.Sprintf("Cleanup started for %s", rootStr),
+		})
+
+		// Run cleanup
+		err := runCore(cfg, log, m)
+
+		// Build summary and notify
+		duration := time.Since(startTime)
+		payload := notifier.WebhookPayload{
+			Timestamp: time.Now(),
+			Summary: &notifier.CleanupSummary{
+				Root:        rootStr,
+				Mode:        cfg.Execution.Mode,
+				Duration:    duration.Round(time.Second).String(),
+				StartedAt:   startTime,
+				CompletedAt: time.Now(),
+			},
+		}
+
+		if err != nil {
+			payload.Event = notifier.EventCleanupFailed
+			payload.Message = fmt.Sprintf("Cleanup failed: %v", err)
+			payload.Summary.ErrorMessages = []string{err.Error()}
+			payload.Summary.Errors = 1
+		} else {
+			payload.Event = notifier.EventCleanupCompleted
+			payload.Message = "Cleanup completed successfully"
+		}
+
+		notify.Notify(ctx, payload)
+
+		return err
 	}
 
 	// Create and run daemon
@@ -644,4 +690,32 @@ func sortPlan(plan []core.PlanItem) {
 		}
 		return a.Candidate.Path < b.Candidate.Path
 	})
+}
+
+// createNotifier creates a notifier from configuration.
+func createNotifier(cfg config.NotificationsConfig, log logger.Logger) notifier.Notifier {
+	if len(cfg.Webhooks) == 0 {
+		return &notifier.NoopNotifier{}
+	}
+
+	multi := notifier.NewMultiNotifier()
+	for _, whCfg := range cfg.Webhooks {
+		// Convert config events to notifier events
+		events := make([]notifier.EventType, 0, len(whCfg.Events))
+		for _, e := range whCfg.Events {
+			events = append(events, notifier.EventType(e))
+		}
+
+		wh := notifier.NewWebhook(notifier.WebhookConfig{
+			URL:     whCfg.URL,
+			Headers: whCfg.Headers,
+			Events:  events,
+			Timeout: whCfg.Timeout,
+		})
+		multi.Add(wh)
+
+		log.Info("webhook configured", logger.F("url", whCfg.URL))
+	}
+
+	return multi
 }

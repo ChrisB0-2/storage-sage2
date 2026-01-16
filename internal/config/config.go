@@ -11,14 +11,15 @@ import (
 
 // Config represents the complete configuration for storage-sage.
 type Config struct {
-	Version   int             `yaml:"version"`
-	Scan      ScanConfig      `yaml:"scan"`
-	Policy    PolicyConfig    `yaml:"policy"`
-	Safety    SafetyConfig    `yaml:"safety"`
-	Execution ExecutionConfig `yaml:"execution"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Daemon    DaemonConfig    `yaml:"daemon"`
-	Metrics   MetricsConfig   `yaml:"metrics"`
+	Version       int                 `yaml:"version"`
+	Scan          ScanConfig          `yaml:"scan"`
+	Policy        PolicyConfig        `yaml:"policy"`
+	Safety        SafetyConfig        `yaml:"safety"`
+	Execution     ExecutionConfig     `yaml:"execution"`
+	Logging       LoggingConfig       `yaml:"logging"`
+	Daemon        DaemonConfig        `yaml:"daemon"`
+	Metrics       MetricsConfig       `yaml:"metrics"`
+	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
 }
 
 // ScanConfig configures the filesystem scanning behavior.
@@ -87,6 +88,19 @@ type MetricsConfig struct {
 	Namespace string `yaml:"namespace"`
 }
 
+// NotificationsConfig configures notification webhooks.
+type NotificationsConfig struct {
+	Webhooks []WebhookConfig `yaml:"webhooks,omitempty"`
+}
+
+// WebhookConfig configures a single webhook endpoint.
+type WebhookConfig struct {
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers,omitempty"`
+	Events  []string          `yaml:"events,omitempty"` // cleanup_started, cleanup_completed, cleanup_failed
+	Timeout time.Duration     `yaml:"timeout,omitempty"`
+}
+
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	return &Config{
@@ -144,6 +158,9 @@ func Default() *Config {
 		Metrics: MetricsConfig{
 			Enabled:   false,
 			Namespace: "storage_sage",
+		},
+		Notifications: NotificationsConfig{
+			Webhooks: []WebhookConfig{},
 		},
 	}
 }

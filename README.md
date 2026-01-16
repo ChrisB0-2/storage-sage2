@@ -440,6 +440,65 @@ docker run -d --name loki -p 3100:3100 grafana/loki:latest
 storage-sage -root /tmp -loki -loki-url http://localhost:3100
 ```
 
+## Webhook Notifications
+
+Storage-Sage can send notifications to HTTP endpoints when cleanup events occur. This is useful for alerting via Slack, Discord, PagerDuty, or custom systems.
+
+### Configuration
+
+Webhooks are configured in the YAML configuration file:
+
+```yaml
+notifications:
+  webhooks:
+    # Generic webhook
+    - url: "https://your-server.com/webhook"
+      headers:
+        Authorization: "Bearer your-token"
+      events:
+        - cleanup_completed
+        - cleanup_failed
+
+    # Slack webhook
+    - url: "https://hooks.slack.com/services/T00/B00/XXX"
+      events:
+        - cleanup_completed
+        - cleanup_failed
+```
+
+### Event Types
+
+| Event | Description |
+|-------|-------------|
+| `cleanup_started` | Cleanup run has begun |
+| `cleanup_completed` | Cleanup finished successfully |
+| `cleanup_failed` | Cleanup encountered an error |
+
+### Webhook Payload
+
+```json
+{
+  "event": "cleanup_completed",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "message": "Cleanup completed successfully",
+  "summary": {
+    "root": "/tmp",
+    "mode": "execute",
+    "files_scanned": 1500,
+    "files_deleted": 45,
+    "bytes_freed": 104857600,
+    "errors": 0,
+    "duration": "5s",
+    "started_at": "2024-01-15T10:29:55Z",
+    "completed_at": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Slack Integration
+
+For Slack, use an incoming webhook URL. The payload is JSON-formatted and can be parsed by Slack workflows or custom handlers.
+
 ## Architecture
 
 ```
