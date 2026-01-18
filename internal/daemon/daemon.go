@@ -79,8 +79,8 @@ type Config struct {
 	HTTPAddr string // Address for health/ready endpoints (e.g., ":8080")
 
 	// Optional: references for API endpoints
-	AppConfig *config.Config           // Application config to expose via /api/config
-	Auditor   *auditor.SQLiteAuditor   // Auditor for /api/audit/* endpoints
+	AppConfig *config.Config         // Application config to expose via /api/config
+	Auditor   *auditor.SQLiteAuditor // Auditor for /api/audit/* endpoints
 }
 
 // New creates a new daemon instance.

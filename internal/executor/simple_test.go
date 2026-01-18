@@ -399,19 +399,19 @@ func newMockMetrics() *mockMetrics {
 	}
 }
 
-func (m *mockMetrics) IncFilesScanned(root string)                        { m.filesScanned[root]++ }
-func (m *mockMetrics) IncDirsScanned(root string)                         { m.dirsScanned[root]++ }
-func (m *mockMetrics) ObserveScanDuration(root string, d time.Duration)   {}
-func (m *mockMetrics) IncPolicyDecision(reason string, allowed bool)      { m.policyDecision[reason]++ }
-func (m *mockMetrics) IncSafetyVerdict(reason string, allowed bool)       { m.safetyVerdict[reason]++ }
-func (m *mockMetrics) SetBytesEligible(bytes int64)                       {}
-func (m *mockMetrics) SetFilesEligible(count int)                         {}
-func (m *mockMetrics) IncFilesDeleted(root string)                        { m.filesDeleted[root]++ }
-func (m *mockMetrics) IncDirsDeleted(root string)                         { m.dirsDeleted[root]++ }
-func (m *mockMetrics) AddBytesFreed(bytes int64)                          { m.bytesFreed += bytes }
-func (m *mockMetrics) IncDeleteErrors(reason string)                      { m.deleteErrors[reason]++ }
-func (m *mockMetrics) SetDiskUsage(percent float64)                       {}
-func (m *mockMetrics) SetCPUUsage(percent float64)                        {}
+func (m *mockMetrics) IncFilesScanned(root string)                      { m.filesScanned[root]++ }
+func (m *mockMetrics) IncDirsScanned(root string)                       { m.dirsScanned[root]++ }
+func (m *mockMetrics) ObserveScanDuration(root string, d time.Duration) {}
+func (m *mockMetrics) IncPolicyDecision(reason string, allowed bool)    { m.policyDecision[reason]++ }
+func (m *mockMetrics) IncSafetyVerdict(reason string, allowed bool)     { m.safetyVerdict[reason]++ }
+func (m *mockMetrics) SetBytesEligible(bytes int64)                     {}
+func (m *mockMetrics) SetFilesEligible(count int)                       {}
+func (m *mockMetrics) IncFilesDeleted(root string)                      { m.filesDeleted[root]++ }
+func (m *mockMetrics) IncDirsDeleted(root string)                       { m.dirsDeleted[root]++ }
+func (m *mockMetrics) AddBytesFreed(bytes int64)                        { m.bytesFreed += bytes }
+func (m *mockMetrics) IncDeleteErrors(reason string)                    { m.deleteErrors[reason]++ }
+func (m *mockMetrics) SetDiskUsage(percent float64)                     {}
+func (m *mockMetrics) SetCPUUsage(percent float64)                      {}
 
 // mockAuditor implements core.Auditor for testing
 type mockAuditor struct {
@@ -712,7 +712,7 @@ func TestExecuteFileDeleteFailure(t *testing.T) {
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Skip("cannot change directory permissions")
 	}
-	defer os.Chmod(dir, 0o755)
+	defer func() { _ = os.Chmod(dir, 0o755) }()
 
 	safe := &mockSafety{allowed: true, reason: "ok"}
 	cfg := core.SafetyConfig{AllowedRoots: []string{dir}}
@@ -792,7 +792,7 @@ func TestExecuteDirectoryDeleteFailure(t *testing.T) {
 	if err := os.Chmod(dir, 0o555); err != nil {
 		t.Skip("cannot change directory permissions")
 	}
-	defer os.Chmod(dir, 0o755)
+	defer func() { _ = os.Chmod(dir, 0o755) }()
 
 	safe := &mockSafety{allowed: true, reason: "ok"}
 	cfg := core.SafetyConfig{AllowedRoots: []string{dir}, AllowDirDelete: true}

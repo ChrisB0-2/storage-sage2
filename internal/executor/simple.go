@@ -242,7 +242,7 @@ func (e *Simple) record(ctx context.Context, item core.PlanItem, res core.Action
 			case reasonDeleted:
 				return "delete"
 			case reasonWouldDelete:
-				return "would_delete"
+				return reasonWouldDelete
 			default:
 				return "skip"
 			}
