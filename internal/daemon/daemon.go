@@ -2,16 +2,23 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/ChrisB0-2/storage-sage/internal/auditor"
+	"github.com/ChrisB0-2/storage-sage/internal/config"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
+	"github.com/ChrisB0-2/storage-sage/internal/web"
 )
 
 // State represents the current daemon state.
@@ -52,6 +59,10 @@ type Daemon struct {
 	schedule string
 	httpAddr string
 
+	// Optional references for API endpoints
+	cfg     *config.Config
+	auditor *auditor.SQLiteAuditor
+
 	state      atomic.Int32
 	running    atomic.Bool
 	lastRun    time.Time
@@ -66,6 +77,10 @@ type Daemon struct {
 type Config struct {
 	Schedule string // Cron expression (e.g., "0 */6 * * *" for every 6 hours)
 	HTTPAddr string // Address for health/ready endpoints (e.g., ":8080")
+
+	// Optional: references for API endpoints
+	AppConfig *config.Config           // Application config to expose via /api/config
+	Auditor   *auditor.SQLiteAuditor   // Auditor for /api/audit/* endpoints
 }
 
 // New creates a new daemon instance.
@@ -82,6 +97,8 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 		runFunc:  runFunc,
 		schedule: cfg.Schedule,
 		httpAddr: cfg.HTTPAddr,
+		cfg:      cfg.AppConfig,
+		auditor:  cfg.Auditor,
 		stopCh:   make(chan struct{}),
 	}
 	d.state.Store(int32(StateStarting))
@@ -334,6 +351,14 @@ func (d *Daemon) startHTTP() error {
 		_, _ = fmt.Fprint(w, `{"triggered":true}`)
 	})
 
+	// API endpoints for frontend
+	mux.HandleFunc("/api/config", d.handleAPIConfig)
+	mux.HandleFunc("/api/audit/query", d.handleAuditQuery)
+	mux.HandleFunc("/api/audit/stats", d.handleAuditStats)
+
+	// Serve embedded frontend (SPA with fallback to index.html)
+	d.setupStaticFileServer(mux)
+
 	d.httpServer = &http.Server{
 		Addr:              d.httpAddr,
 		Handler:           mux,
@@ -351,4 +376,227 @@ func (d *Daemon) startHTTP() error {
 	time.Sleep(50 * time.Millisecond)
 
 	return nil
+}
+
+// handleAPIConfig returns the current running configuration as JSON.
+func (d *Daemon) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if d.cfg == nil {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"config not available"}`))
+		return
+	}
+
+	// Return config as JSON
+	data, err := json.Marshal(d.cfg)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"error":"failed to marshal config: %s"}`, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// handleAuditQuery queries audit records with optional filters.
+// Query params: since, until, action, level, path, limit
+func (d *Daemon) handleAuditQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if d.auditor == nil {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"auditor not available"}`))
+		return
+	}
+
+	// Parse query parameters
+	q := r.URL.Query()
+	filter := auditor.QueryFilter{
+		Action: q.Get("action"),
+		Level:  q.Get("level"),
+		Path:   q.Get("path"),
+	}
+
+	// Parse time filters
+	if since := q.Get("since"); since != "" {
+		if t, err := parseTimeParam(since); err == nil {
+			filter.Since = t
+		}
+	}
+	if until := q.Get("until"); until != "" {
+		if t, err := parseTimeParam(until); err == nil {
+			filter.Until = t
+		}
+	}
+
+	// Parse limit (default 100)
+	if limitStr := q.Get("limit"); limitStr != "" {
+		if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 {
+			filter.Limit = limit
+		}
+	} else {
+		filter.Limit = 100
+	}
+
+	// Query audit records
+	records, err := d.auditor.Query(r.Context(), filter)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"error":"query failed: %s"}`, err.Error())
+		return
+	}
+
+	// Return records as JSON
+	data, err := json.Marshal(records)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"error":"failed to marshal records: %s"}`, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// handleAuditStats returns audit statistics summary.
+func (d *Daemon) handleAuditStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if d.auditor == nil {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"auditor not available"}`))
+		return
+	}
+
+	stats, err := d.auditor.Stats(r.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"error":"stats failed: %s"}`, err.Error())
+		return
+	}
+
+	// Return stats as JSON
+	data, err := json.Marshal(stats)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = fmt.Fprintf(w, `{"error":"failed to marshal stats: %s"}`, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// setupStaticFileServer configures the mux to serve embedded frontend files.
+// Uses SPA-style routing: serves index.html for any path that doesn't match a static file.
+func (d *Daemon) setupStaticFileServer(mux *http.ServeMux) {
+	distFS, err := web.DistFS()
+	if err != nil {
+		d.log.Warn("frontend not available", logger.F("error", err.Error()))
+		return
+	}
+
+	// Check if frontend is built
+	if !web.HasDist() {
+		d.log.Info("frontend not built, UI disabled")
+		return
+	}
+
+	// Create file server for static assets
+	fileServer := http.FileServer(http.FS(distFS))
+
+	// Serve static files with SPA fallback
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Skip API and health endpoints
+		path := r.URL.Path
+		if strings.HasPrefix(path, "/api/") ||
+			path == "/health" ||
+			path == "/ready" ||
+			path == "/status" ||
+			path == "/trigger" {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Try to serve the actual file
+		cleanPath := strings.TrimPrefix(path, "/")
+		if cleanPath == "" {
+			cleanPath = "index.html"
+		}
+
+		// Check if file exists in embedded FS
+		if _, err := fs.Stat(distFS, cleanPath); err == nil {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+
+		// SPA fallback: serve index.html for all other routes
+		indexFile, err := fs.ReadFile(distFS, "index.html")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(indexFile)
+	})
+
+	d.log.Info("frontend UI enabled")
+}
+
+// parseTimeParam parses a time parameter from various formats.
+// Supports: RFC3339, date (2006-01-02), and duration strings (24h, 7d).
+func parseTimeParam(s string) (time.Time, error) {
+	// Try RFC3339 first
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+
+	// Try date format
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+
+	// Try duration format (e.g., "24h", "7d")
+	if len(s) > 1 {
+		unit := s[len(s)-1]
+		numStr := s[:len(s)-1]
+		var multiplier time.Duration
+		switch unit {
+		case 'h':
+			multiplier = time.Hour
+		case 'd':
+			multiplier = 24 * time.Hour
+		case 'm':
+			multiplier = time.Minute
+		}
+		if multiplier > 0 {
+			var n int
+			if _, err := fmt.Sscanf(numStr, "%d", &n); err == nil && n > 0 {
+				return time.Now().Add(-time.Duration(n) * multiplier), nil
+			}
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("invalid time format: %s", s)
 }

@@ -7,12 +7,14 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 
 BINARY  := storage-sage
 CMD     := ./cmd/storage-sage
+WEB_DIR := web
 
 # Build targets
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
 .PHONY: all build clean test lint vet fmt tidy help
 .PHONY: build-all $(PLATFORMS)
+.PHONY: frontend-build frontend-dev frontend-clean frontend-install
 
 all: tidy fmt vet lint test build
 
@@ -105,4 +107,39 @@ help:
 	@echo "  make install      - Install binary to GOPATH/bin"
 	@echo "  make run          - Build and run in dry-run mode"
 	@echo ""
+	@echo "Frontend Targets:"
+	@echo "  make frontend-install - Install npm dependencies"
+	@echo "  make frontend-build   - Build frontend and copy to internal/web/dist"
+	@echo "  make frontend-dev     - Run frontend dev server"
+	@echo "  make frontend-clean   - Remove frontend build artifacts"
+	@echo "  make build-with-ui    - Build binary with embedded frontend"
+	@echo ""
 	@echo "Platforms: $(PLATFORMS)"
+
+# =============================================================================
+# Frontend Targets
+# =============================================================================
+
+# Install frontend dependencies
+frontend-install:
+	cd $(WEB_DIR) && npm install
+
+# Build frontend and copy to internal/web/dist for embedding
+frontend-build: frontend-install
+	cd $(WEB_DIR) && npm run build
+	rm -rf internal/web/dist
+	cp -r $(WEB_DIR)/dist internal/web/dist
+
+# Run frontend development server (requires daemon running at :8080)
+frontend-dev: frontend-install
+	cd $(WEB_DIR) && npm run dev
+
+# Clean frontend build artifacts
+frontend-clean:
+	rm -rf $(WEB_DIR)/node_modules $(WEB_DIR)/dist internal/web/dist
+	mkdir -p internal/web/dist
+	echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Storage Sage</title></head><body><h1>Frontend not built</h1><p>Run: make frontend-build</p></body></html>' > internal/web/dist/index.html
+
+# Build binary with embedded frontend
+build-with-ui: frontend-build build
+	@echo "Built $(BINARY) with embedded frontend"

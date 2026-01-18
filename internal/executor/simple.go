@@ -89,12 +89,12 @@ func (e *Simple) WithAuditor(aud core.Auditor) *Simple {
 //  3. execute-time safety re-check (safe.Validate) to prevent TOCTOU
 //  4. dry-run: report would-delete
 //  5. execute: delete (file/dir), fail-closed
-func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode) core.ActionResult {
+func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode) (res core.ActionResult) {
 	start := e.now()
 
 	e.log.Debug("executing action", logger.F("path", item.Candidate.Path), logger.F("mode", string(mode)))
 
-	res := core.ActionResult{
+	res = core.ActionResult{
 		Path:      item.Candidate.Path,
 		Type:      item.Candidate.Type,
 		Mode:      mode,
@@ -103,6 +103,7 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 	}
 
 	// Always finalize + audit on return.
+	// Uses named return value so defer modifications are visible to caller.
 	defer func() {
 		if res.FinishedAt.IsZero() {
 			res.FinishedAt = e.now()

@@ -396,6 +396,26 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 	// Initialize webhook notifier
 	notify := createNotifier(cfg.Notifications, log)
 
+	// Initialize SQLite auditor for API endpoints (query/stats)
+	// This is separate from the per-run auditor in runCore, used for reading audit data
+	var sqlAud *auditor.SQLiteAuditor
+	if cfg.Execution.AuditDBPath != "" {
+		var err error
+		sqlAud, err = auditor.NewSQLite(auditor.SQLiteConfig{
+			Path: cfg.Execution.AuditDBPath,
+		})
+		if err != nil {
+			log.Warn("failed to initialize audit DB for API", logger.F("error", err.Error()))
+		} else {
+			log.Info("audit API enabled", logger.F("path", cfg.Execution.AuditDBPath))
+			defer func() {
+				if err := sqlAud.Close(); err != nil {
+					log.Warn("audit DB close error", logger.F("error", err.Error()))
+				}
+			}()
+		}
+	}
+
 	// Create the run function that executes a single cleanup cycle
 	// Uses shared metrics instance for persistent metrics
 	// Wraps with webhook notifications
@@ -444,10 +464,12 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		return err
 	}
 
-	// Create and run daemon
+	// Create and run daemon with config and auditor for API endpoints
 	d := daemon.New(log, runFunc, daemon.Config{
-		Schedule: sched,
-		HTTPAddr: addr,
+		Schedule:  sched,
+		HTTPAddr:  addr,
+		AppConfig: cfg,
+		Auditor:   sqlAud,
 	})
 
 	return d.Run(context.Background())

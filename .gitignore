@@ -1,6 +1,6 @@
 # binaries / build outputs
 /storage-sage
-dist/
+/dist/
 *.exe
 *.out
 
@@ -20,3 +20,12 @@ dist/
 # backup files
 *.bak
 *.bak[0-9]*
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+internal/web/dist/assets/
+
+# Environment files
+.env
+.env.local
