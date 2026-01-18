@@ -356,15 +356,15 @@ func (a *SQLiteAuditor) Stats(ctx context.Context) (*AuditStats, error) {
 		stats.LastRecord, _ = time.Parse(time.RFC3339Nano, lastTS.String)
 	}
 
-	// Total bytes freed
+	// Total bytes freed (execute events with bytes_freed > 0 indicate actual deletions)
 	var totalBytes sql.NullInt64
-	if err := a.db.QueryRowContext(ctx, "SELECT SUM(bytes_freed) FROM audit_log WHERE action = 'delete'").Scan(&totalBytes); err != nil && err != sql.ErrNoRows {
+	if err := a.db.QueryRowContext(ctx, "SELECT SUM(bytes_freed) FROM audit_log WHERE action = 'execute' AND bytes_freed > 0").Scan(&totalBytes); err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
 	stats.TotalBytesFreed = totalBytes.Int64
 
-	// Files deleted
-	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'delete'").Scan(&stats.FilesDeleted); err != nil {
+	// Files deleted (count execute events where bytes were freed)
+	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'execute' AND bytes_freed > 0").Scan(&stats.FilesDeleted); err != nil {
 		return nil, err
 	}
 

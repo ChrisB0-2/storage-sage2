@@ -166,11 +166,12 @@ func TestSQLiteAuditor_Stats(t *testing.T) {
 	}
 	defer aud.Close()
 
-	// Record events
+	// Record events (action="execute" with bytes_freed > 0 counts as deleted)
 	events := []core.AuditEvent{
-		{Time: time.Now(), Level: "info", Action: "delete", Fields: map[string]any{"bytes_freed": int64(1024)}},
-		{Time: time.Now(), Level: "info", Action: "delete", Fields: map[string]any{"bytes_freed": int64(2048)}},
-		{Time: time.Now(), Level: "error", Action: "delete"},
+		{Time: time.Now(), Level: "info", Action: "execute", Fields: map[string]any{"bytes_freed": int64(1024)}},
+		{Time: time.Now(), Level: "info", Action: "execute", Fields: map[string]any{"bytes_freed": int64(2048)}},
+		{Time: time.Now(), Level: "info", Action: "plan"}, // plan events don't count as deleted
+		{Time: time.Now(), Level: "error", Action: "execute"},
 	}
 	for _, evt := range events {
 		aud.Record(context.Background(), evt)
@@ -181,11 +182,11 @@ func TestSQLiteAuditor_Stats(t *testing.T) {
 		t.Fatalf("stats failed: %v", err)
 	}
 
-	if stats.TotalRecords != 3 {
-		t.Errorf("expected 3 total records, got %d", stats.TotalRecords)
+	if stats.TotalRecords != 4 {
+		t.Errorf("expected 4 total records, got %d", stats.TotalRecords)
 	}
-	if stats.FilesDeleted != 3 {
-		t.Errorf("expected 3 deleted, got %d", stats.FilesDeleted)
+	if stats.FilesDeleted != 2 {
+		t.Errorf("expected 2 deleted (execute with bytes_freed > 0), got %d", stats.FilesDeleted)
 	}
 	if stats.Errors != 1 {
 		t.Errorf("expected 1 error, got %d", stats.Errors)
