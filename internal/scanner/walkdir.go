@@ -72,7 +72,13 @@ func (s *WalkDirScanner) Scan(ctx context.Context, req core.ScanRequest) (<-chan
 			scanStart := time.Now()
 			walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
-					return err
+					// Log permission/access errors and skip, rather than failing the entire scan.
+					s.log.Debug("skipping inaccessible path", logger.F("path", path), logger.F("error", err.Error()))
+					// For directories, return SkipDir to avoid descending; for files, return nil to continue.
+					if d != nil && d.IsDir() {
+						return fs.SkipDir
+					}
+					return nil
 				}
 
 				select {

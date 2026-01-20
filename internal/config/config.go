@@ -11,95 +11,95 @@ import (
 
 // Config represents the complete configuration for storage-sage.
 type Config struct {
-	Version       int                 `yaml:"version"`
-	Scan          ScanConfig          `yaml:"scan"`
-	Policy        PolicyConfig        `yaml:"policy"`
-	Safety        SafetyConfig        `yaml:"safety"`
-	Execution     ExecutionConfig     `yaml:"execution"`
-	Logging       LoggingConfig       `yaml:"logging"`
-	Daemon        DaemonConfig        `yaml:"daemon"`
-	Metrics       MetricsConfig       `yaml:"metrics"`
-	Notifications NotificationsConfig `yaml:"notifications,omitempty"`
+	Version       int                 `yaml:"version" json:"version"`
+	Scan          ScanConfig          `yaml:"scan" json:"scan"`
+	Policy        PolicyConfig        `yaml:"policy" json:"policy"`
+	Safety        SafetyConfig        `yaml:"safety" json:"safety"`
+	Execution     ExecutionConfig     `yaml:"execution" json:"execution"`
+	Logging       LoggingConfig       `yaml:"logging" json:"logging"`
+	Daemon        DaemonConfig        `yaml:"daemon" json:"daemon"`
+	Metrics       MetricsConfig       `yaml:"metrics" json:"metrics"`
+	Notifications NotificationsConfig `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 }
 
 // ScanConfig configures the filesystem scanning behavior.
 type ScanConfig struct {
-	Roots          []string `yaml:"roots"`
-	Recursive      bool     `yaml:"recursive"`
-	MaxDepth       int      `yaml:"max_depth"`
-	FollowSymlinks bool     `yaml:"follow_symlinks"`
-	IncludeDirs    bool     `yaml:"include_dirs"`
-	IncludeFiles   bool     `yaml:"include_files"`
+	Roots          []string `yaml:"roots" json:"roots"`
+	Recursive      bool     `yaml:"recursive" json:"recursive"`
+	MaxDepth       int      `yaml:"max_depth" json:"max_depth"`
+	FollowSymlinks bool     `yaml:"follow_symlinks" json:"follow_symlinks"`
+	IncludeDirs    bool     `yaml:"include_dirs" json:"include_dirs"`
+	IncludeFiles   bool     `yaml:"include_files" json:"include_files"`
 }
 
 // PolicyConfig configures the file selection policy.
 type PolicyConfig struct {
-	MinAgeDays    int      `yaml:"min_age_days"`
-	MinSizeMB     int      `yaml:"min_size_mb"`
-	Extensions    []string `yaml:"extensions"`
-	Exclusions    []string `yaml:"exclusions"`     // glob patterns to exclude from deletion
-	CompositeMode string   `yaml:"composite_mode"` // "and" or "or"
+	MinAgeDays    int      `yaml:"min_age_days" json:"min_age_days"`
+	MinSizeMB     int      `yaml:"min_size_mb" json:"min_size_mb"`
+	Extensions    []string `yaml:"extensions" json:"extensions"`
+	Exclusions    []string `yaml:"exclusions" json:"exclusions"`           // glob patterns to exclude from deletion
+	CompositeMode string   `yaml:"composite_mode" json:"composite_mode"` // "and" or "or"
 }
 
 // SafetyConfig configures safety boundaries.
 type SafetyConfig struct {
-	ProtectedPaths       []string `yaml:"protected_paths"`
-	AllowDirDelete       bool     `yaml:"allow_dir_delete"`
-	EnforceMountBoundary bool     `yaml:"enforce_mount_boundary"`
+	ProtectedPaths       []string `yaml:"protected_paths" json:"protected_paths"`
+	AllowDirDelete       bool     `yaml:"allow_dir_delete" json:"allow_dir_delete"`
+	EnforceMountBoundary bool     `yaml:"enforce_mount_boundary" json:"enforce_mount_boundary"`
 }
 
 // ExecutionConfig configures execution behavior.
 type ExecutionConfig struct {
-	Mode        string        `yaml:"mode"` // "dry-run" or "execute"
-	Timeout     time.Duration `yaml:"timeout"`
-	AuditPath   string        `yaml:"audit_path"`    // JSONL file path
-	AuditDBPath string        `yaml:"audit_db_path"` // SQLite database path
-	MaxItems    int           `yaml:"max_items"`
+	Mode        string        `yaml:"mode" json:"mode"` // "dry-run" or "execute"
+	Timeout     time.Duration `yaml:"timeout" json:"timeout"`
+	AuditPath   string        `yaml:"audit_path" json:"audit_path"`       // JSONL file path
+	AuditDBPath string        `yaml:"audit_db_path" json:"audit_db_path"` // SQLite database path
+	MaxItems    int           `yaml:"max_items" json:"max_items"`
 }
 
 // LoggingConfig configures logging behavior.
 type LoggingConfig struct {
-	Level  string      `yaml:"level"`  // "debug", "info", "warn", "error"
-	Format string      `yaml:"format"` // "json" or "text"
-	Output string      `yaml:"output"` // "stderr", "stdout", or file path
-	Loki   *LokiConfig `yaml:"loki,omitempty"`
+	Level  string      `yaml:"level" json:"level"`   // "debug", "info", "warn", "error"
+	Format string      `yaml:"format" json:"format"` // "json" or "text"
+	Output string      `yaml:"output" json:"output"` // "stderr", "stdout", or file path
+	Loki   *LokiConfig `yaml:"loki,omitempty" json:"loki,omitempty"`
 }
 
 // LokiConfig configures Loki log shipping.
 type LokiConfig struct {
-	Enabled   bool              `yaml:"enabled"`
-	URL       string            `yaml:"url"`        // e.g., http://localhost:3100
-	BatchSize int               `yaml:"batch_size"` // Number of log entries before flush
-	BatchWait time.Duration     `yaml:"batch_wait"` // Max time before flush
-	Labels    map[string]string `yaml:"labels"`     // Static labels for all log streams
-	TenantID  string            `yaml:"tenant_id"`  // X-Scope-OrgID header for multi-tenancy
+	Enabled   bool              `yaml:"enabled" json:"enabled"`
+	URL       string            `yaml:"url" json:"url"`               // e.g., http://localhost:3100
+	BatchSize int               `yaml:"batch_size" json:"batch_size"` // Number of log entries before flush
+	BatchWait time.Duration     `yaml:"batch_wait" json:"batch_wait"` // Max time before flush
+	Labels    map[string]string `yaml:"labels" json:"labels"`         // Static labels for all log streams
+	TenantID  string            `yaml:"tenant_id" json:"tenant_id"`   // X-Scope-OrgID header for multi-tenancy
 }
 
 // DaemonConfig configures daemon mode.
 type DaemonConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	HTTPAddr    string `yaml:"http_addr"`
-	MetricsAddr string `yaml:"metrics_addr"`
-	Schedule    string `yaml:"schedule"` // cron expression
+	Enabled     bool   `yaml:"enabled" json:"enabled"`
+	HTTPAddr    string `yaml:"http_addr" json:"http_addr"`
+	MetricsAddr string `yaml:"metrics_addr" json:"metrics_addr"`
+	Schedule    string `yaml:"schedule" json:"schedule"` // cron expression
 }
 
 // MetricsConfig configures Prometheus metrics.
 type MetricsConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Namespace string `yaml:"namespace"`
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+	Namespace string `yaml:"namespace" json:"namespace"`
 }
 
 // NotificationsConfig configures notification webhooks.
 type NotificationsConfig struct {
-	Webhooks []WebhookConfig `yaml:"webhooks,omitempty"`
+	Webhooks []WebhookConfig `yaml:"webhooks,omitempty" json:"webhooks,omitempty"`
 }
 
 // WebhookConfig configures a single webhook endpoint.
 type WebhookConfig struct {
-	URL     string            `yaml:"url"`
-	Headers map[string]string `yaml:"headers,omitempty"`
-	Events  []string          `yaml:"events,omitempty"` // cleanup_started, cleanup_completed, cleanup_failed
-	Timeout time.Duration     `yaml:"timeout,omitempty"`
+	URL     string            `yaml:"url" json:"url"`
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Events  []string          `yaml:"events,omitempty" json:"events,omitempty"` // cleanup_started, cleanup_completed, cleanup_failed
+	Timeout time.Duration     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 // Default returns a Config with sensible defaults.
