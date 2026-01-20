@@ -37,7 +37,7 @@ type PolicyConfig struct {
 	MinAgeDays    int      `yaml:"min_age_days" json:"min_age_days"`
 	MinSizeMB     int      `yaml:"min_size_mb" json:"min_size_mb"`
 	Extensions    []string `yaml:"extensions" json:"extensions"`
-	Exclusions    []string `yaml:"exclusions" json:"exclusions"`           // glob patterns to exclude from deletion
+	Exclusions    []string `yaml:"exclusions" json:"exclusions"`         // glob patterns to exclude from deletion
 	CompositeMode string   `yaml:"composite_mode" json:"composite_mode"` // "and" or "or"
 }
 
