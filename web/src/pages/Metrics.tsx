@@ -120,11 +120,30 @@ export default function Metrics() {
   const levelDistribution = calculateLevelDistribution(recentRecords);
   const actionDistribution = calculateActionDistribution(recentRecords);
 
+  const grafanaUrl = (import.meta as any).env?.VITE_GRAFANA_URL || 'http://localhost:3000';
+  const dashboardUrl = `${grafanaUrl}/d/storage-sage-ops/storage-sage-operations?orgId=1`;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900">Metrics</h2>
-        <p className="text-gray-600">Key metrics and activity summary</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Metrics</h2>
+          <p className="text-gray-600">Key metrics and activity summary</p>
+        </div>
+        <a
+          href={dashboardUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-lg transition-colors"
+        >
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M22.7 11.4L20.2 9.3L20.5 6L17.3 5.2L15.5 2.4L12.4 3.6L9.3 2.4L7.5 5.2L4.3 6L4.6 9.3L2.1 11.4L4.2 14.1L3.5 17.3L6.5 18.5L7.9 21.6L11.3 20.7L14.5 22L16.3 19.1L19.5 18.5L18.8 15.2L21.3 12.9L22.7 11.4Z"/>
+          </svg>
+          Open in Grafana
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+        </a>
       </div>
 
       {/* Overall Stats */}
