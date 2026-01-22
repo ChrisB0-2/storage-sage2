@@ -13,5 +13,6 @@ func getDeviceID(info os.FileInfo) (uint64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return stat.Dev, true
+	//nolint:unconvert // stat.Dev type varies by platform (int32 on some, uint64 on others)
+	return uint64(stat.Dev), true
 }
