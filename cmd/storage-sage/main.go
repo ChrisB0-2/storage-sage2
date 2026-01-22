@@ -466,10 +466,11 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 
 	// Create and run daemon with config and auditor for API endpoints
 	d := daemon.New(log, runFunc, daemon.Config{
-		Schedule:  sched,
-		HTTPAddr:  addr,
-		AppConfig: cfg,
-		Auditor:   sqlAud,
+		Schedule:       sched,
+		HTTPAddr:       addr,
+		TriggerTimeout: cfg.Daemon.TriggerTimeout,
+		AppConfig:      cfg,
+		Auditor:        sqlAud,
 	})
 
 	return d.Run(context.Background())

@@ -24,12 +24,16 @@ type Config struct {
 
 // ScanConfig configures the filesystem scanning behavior.
 type ScanConfig struct {
-	Roots          []string `yaml:"roots" json:"roots"`
-	Recursive      bool     `yaml:"recursive" json:"recursive"`
-	MaxDepth       int      `yaml:"max_depth" json:"max_depth"`
-	FollowSymlinks bool     `yaml:"follow_symlinks" json:"follow_symlinks"`
-	IncludeDirs    bool     `yaml:"include_dirs" json:"include_dirs"`
-	IncludeFiles   bool     `yaml:"include_files" json:"include_files"`
+	Roots     []string `yaml:"roots" json:"roots"`
+	Recursive bool     `yaml:"recursive" json:"recursive"`
+	MaxDepth  int      `yaml:"max_depth" json:"max_depth"`
+	// FollowSymlinks is accepted for configuration compatibility but intentionally
+	// ignored. The scanner always uses lstat (not stat) to prevent symlink-based
+	// attacks. Following symlinks would allow deletion of files outside allowed
+	// roots via malicious symlink placement. This is a safety-critical design decision.
+	FollowSymlinks bool `yaml:"follow_symlinks" json:"follow_symlinks"`
+	IncludeDirs    bool `yaml:"include_dirs" json:"include_dirs"`
+	IncludeFiles   bool `yaml:"include_files" json:"include_files"`
 }
 
 // PolicyConfig configures the file selection policy.
@@ -77,10 +81,11 @@ type LokiConfig struct {
 
 // DaemonConfig configures daemon mode.
 type DaemonConfig struct {
-	Enabled     bool   `yaml:"enabled" json:"enabled"`
-	HTTPAddr    string `yaml:"http_addr" json:"http_addr"`
-	MetricsAddr string `yaml:"metrics_addr" json:"metrics_addr"`
-	Schedule    string `yaml:"schedule" json:"schedule"` // cron expression
+	Enabled        bool          `yaml:"enabled" json:"enabled"`
+	HTTPAddr       string        `yaml:"http_addr" json:"http_addr"`
+	MetricsAddr    string        `yaml:"metrics_addr" json:"metrics_addr"`
+	Schedule       string        `yaml:"schedule" json:"schedule"`               // cron expression
+	TriggerTimeout time.Duration `yaml:"trigger_timeout" json:"trigger_timeout"` // timeout for manual /trigger requests
 }
 
 // MetricsConfig configures Prometheus metrics.
@@ -151,10 +156,11 @@ func Default() *Config {
 			},
 		},
 		Daemon: DaemonConfig{
-			Enabled:     false,
-			HTTPAddr:    ":8080",
-			MetricsAddr: ":9090",
-			Schedule:    "",
+			Enabled:        false,
+			HTTPAddr:       ":8080",
+			MetricsAddr:    ":9090",
+			Schedule:       "",
+			TriggerTimeout: 30 * time.Minute,
 		},
 		Metrics: MetricsConfig{
 			Enabled:   false,
