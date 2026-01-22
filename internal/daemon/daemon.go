@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ChrisB0-2/storage-sage/internal/auditor"
+	"github.com/ChrisB0-2/storage-sage/internal/auth"
 	"github.com/ChrisB0-2/storage-sage/internal/config"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 	"github.com/ChrisB0-2/storage-sage/internal/web"
@@ -64,6 +65,10 @@ type Daemon struct {
 	cfg     *config.Config
 	auditor *auditor.SQLiteAuditor
 
+	// Optional authentication middleware
+	authMiddleware *auth.Middleware
+	rbacMiddleware *auth.RBACMiddleware
+
 	state      atomic.Int32
 	running    atomic.Bool
 	lastRun    time.Time
@@ -83,6 +88,10 @@ type Config struct {
 	// Optional: references for API endpoints
 	AppConfig *config.Config         // Application config to expose via /api/config
 	Auditor   *auditor.SQLiteAuditor // Auditor for /api/audit/* endpoints
+
+	// Optional: authentication middleware
+	AuthMiddleware *auth.Middleware     // Authentication middleware
+	RBACMiddleware *auth.RBACMiddleware // Role-based access control middleware
 }
 
 // New creates a new daemon instance.
@@ -105,6 +114,8 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 		triggerTimeout: cfg.TriggerTimeout,
 		cfg:            cfg.AppConfig,
 		auditor:        cfg.Auditor,
+		authMiddleware: cfg.AuthMiddleware,
+		rbacMiddleware: cfg.RBACMiddleware,
 		stopCh:         make(chan struct{}),
 	}
 	d.state.Store(int32(StateStarting))
@@ -364,9 +375,18 @@ func (d *Daemon) startHTTP() error {
 	// Serve embedded frontend (SPA with fallback to index.html)
 	d.setupStaticFileServer(mux)
 
+	// Wrap handler with authentication middleware if configured
+	var handler http.Handler = mux
+	if d.rbacMiddleware != nil {
+		handler = d.rbacMiddleware.Wrap(handler)
+	}
+	if d.authMiddleware != nil {
+		handler = d.authMiddleware.Wrap(handler)
+	}
+
 	d.httpServer = &http.Server{
 		Addr:              d.httpAddr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ChrisB0-2/storage-sage/internal/auditor"
+	"github.com/ChrisB0-2/storage-sage/internal/auth"
 	"github.com/ChrisB0-2/storage-sage/internal/config"
 	"github.com/ChrisB0-2/storage-sage/internal/core"
 	"github.com/ChrisB0-2/storage-sage/internal/daemon"
@@ -56,6 +57,10 @@ var (
 	// Loki flags
 	enableLoki = flag.Bool("loki", false, "enable Loki log shipping")
 	lokiURL    = flag.String("loki-url", "", "Loki server URL (default http://localhost:3100)")
+
+	// Auth flags
+	authEnabled = flag.Bool("auth", false, "enable API authentication")
+	authKey     = flag.String("auth-key", "", "API key for authentication (format: ss_<32 hex chars>)")
 )
 
 func main() {
@@ -464,6 +469,38 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		return err
 	}
 
+	// Initialize auth middleware if enabled
+	var authMW *auth.Middleware
+	var rbacMW *auth.RBACMiddleware
+
+	if cfg.Auth != nil && cfg.Auth.Enabled {
+		authenticators := []auth.Authenticator{}
+
+		if cfg.Auth.APIKeys != nil && cfg.Auth.APIKeys.Enabled {
+			apiKeyAuth, err := auth.NewAPIKeyAuthenticator(auth.APIKeyConfig{
+				Enabled:    cfg.Auth.APIKeys.Enabled,
+				Key:        cfg.Auth.APIKeys.Key,
+				KeyEnv:     cfg.Auth.APIKeys.KeyEnv,
+				KeysFile:   cfg.Auth.APIKeys.KeysFile,
+				HeaderName: cfg.Auth.APIKeys.HeaderName,
+			}, log)
+			if err != nil {
+				return fmt.Errorf("auth setup failed: %w", err)
+			}
+			authenticators = append(authenticators, apiKeyAuth)
+		}
+
+		if len(authenticators) > 0 {
+			publicPaths := cfg.Auth.PublicPaths
+			if publicPaths == nil {
+				publicPaths = []string{"/health"}
+			}
+			authMW = auth.NewMiddleware(log, authenticators, publicPaths)
+			rbacMW = auth.NewRBACMiddleware(auth.DefaultPermissions(), log)
+			log.Info("authentication enabled", logger.F("methods", len(authenticators)))
+		}
+	}
+
 	// Create and run daemon with config and auditor for API endpoints
 	d := daemon.New(log, runFunc, daemon.Config{
 		Schedule:       sched,
@@ -471,6 +508,8 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		TriggerTimeout: cfg.Daemon.TriggerTimeout,
 		AppConfig:      cfg,
 		Auditor:        sqlAud,
+		AuthMiddleware: authMW,
+		RBACMiddleware: rbacMW,
 	})
 
 	return d.Run(context.Background())
@@ -606,6 +645,25 @@ func mergeFlags(cfg *config.Config) {
 			cfg.Logging.Loki = &config.LokiConfig{}
 		}
 		cfg.Logging.Loki.URL = *lokiURL
+	}
+
+	// Merge auth flags
+	if flagSet["auth"] {
+		if cfg.Auth == nil {
+			cfg.Auth = &config.AuthConfig{}
+		}
+		cfg.Auth.Enabled = *authEnabled
+	}
+	if flagSet["auth-key"] && *authKey != "" {
+		if cfg.Auth == nil {
+			cfg.Auth = &config.AuthConfig{}
+		}
+		cfg.Auth.Enabled = true
+		if cfg.Auth.APIKeys == nil {
+			cfg.Auth.APIKeys = &config.APIKeyConfig{Enabled: true}
+		}
+		cfg.Auth.APIKeys.Enabled = true
+		cfg.Auth.APIKeys.Key = *authKey
 	}
 }
 

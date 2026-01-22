@@ -20,6 +20,7 @@ type Config struct {
 	Daemon        DaemonConfig        `yaml:"daemon" json:"daemon"`
 	Metrics       MetricsConfig       `yaml:"metrics" json:"metrics"`
 	Notifications NotificationsConfig `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Auth          *AuthConfig         `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
 // ScanConfig configures the filesystem scanning behavior.
@@ -107,6 +108,30 @@ type WebhookConfig struct {
 	Timeout time.Duration     `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
+// AuthConfig configures authentication for the HTTP API.
+type AuthConfig struct {
+	// Enabled enables authentication. When false, all endpoints are accessible without authentication.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// APIKeys configures API key authentication.
+	APIKeys *APIKeyConfig `yaml:"api_keys,omitempty" json:"api_keys,omitempty"`
+	// PublicPaths are paths that don't require authentication (e.g., /health).
+	PublicPaths []string `yaml:"public_paths,omitempty" json:"public_paths,omitempty"`
+}
+
+// APIKeyConfig configures API key authentication.
+type APIKeyConfig struct {
+	// Enabled enables API key authentication.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Key is a single API key for simple setups. Hidden from /api/config endpoint.
+	Key string `yaml:"key,omitempty" json:"-"`
+	// KeyEnv is the name of an environment variable containing the API key.
+	KeyEnv string `yaml:"key_env,omitempty" json:"key_env,omitempty"`
+	// KeysFile is the path to a file containing multiple keys.
+	KeysFile string `yaml:"keys_file,omitempty" json:"keys_file,omitempty"`
+	// HeaderName is the header name for API key authentication (default: X-API-Key).
+	HeaderName string `yaml:"header_name,omitempty" json:"header_name,omitempty"`
+}
+
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	return &Config{
@@ -168,6 +193,10 @@ func Default() *Config {
 		},
 		Notifications: NotificationsConfig{
 			Webhooks: []WebhookConfig{},
+		},
+		Auth: &AuthConfig{
+			Enabled:     false, // Backwards compatible - disabled by default
+			PublicPaths: []string{"/health"},
 		},
 	}
 }

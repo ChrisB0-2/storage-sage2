@@ -63,6 +63,9 @@ func Validate(cfg *Config) error {
 	errs = append(errs, ValidateExecution(cfg.Execution)...)
 	errs = append(errs, ValidateLogging(cfg.Logging)...)
 	errs = append(errs, ValidateDaemon(cfg.Daemon)...)
+	if cfg.Auth != nil {
+		errs = append(errs, ValidateAuth(*cfg.Auth)...)
+	}
 
 	if len(errs) > 0 {
 		return errs
@@ -346,4 +349,82 @@ func contains(slice []string, val string) bool {
 		}
 	}
 	return false
+}
+
+// ValidateAuth checks authentication configuration.
+func ValidateAuth(auth AuthConfig) []ValidationError {
+	var errs []ValidationError
+
+	// If auth is not enabled, no further validation needed
+	if !auth.Enabled {
+		return errs
+	}
+
+	// If auth is enabled, at least one authentication method must be configured
+	hasAuthMethod := false
+
+	if auth.APIKeys != nil && auth.APIKeys.Enabled {
+		hasAuthMethod = true
+
+		// Validate API key configuration
+		errs = append(errs, ValidateAPIKeys(*auth.APIKeys)...)
+	}
+
+	if !hasAuthMethod {
+		errs = append(errs, ValidationError{
+			Field:   "auth",
+			Message: "at least one authentication method must be enabled when auth is enabled",
+		})
+	}
+
+	return errs
+}
+
+// ValidateAPIKeys checks API key authentication configuration.
+func ValidateAPIKeys(apiKeys APIKeyConfig) []ValidationError {
+	var errs []ValidationError
+
+	// At least one key source must be provided
+	hasKeySource := apiKeys.Key != "" || apiKeys.KeyEnv != "" || apiKeys.KeysFile != ""
+	if !hasKeySource {
+		errs = append(errs, ValidationError{
+			Field:   "auth.api_keys",
+			Message: "at least one key source must be provided (key, key_env, or keys_file)",
+		})
+	}
+
+	// Validate key format if provided directly
+	if apiKeys.Key != "" {
+		if !validateAPIKeyFormat(apiKeys.Key) {
+			errs = append(errs, ValidationError{
+				Field:   "auth.api_keys.key",
+				Message: "invalid API key format: must be 'ss_' followed by 32 hex characters",
+			})
+		}
+	}
+
+	return errs
+}
+
+// validateAPIKeyFormat checks if a key has the correct format.
+// Valid format: "ss_" prefix followed by exactly 32 hex characters.
+func validateAPIKeyFormat(key string) bool {
+	const apiKeyPrefix = "ss_"
+	const apiKeyLength = 3 + 32 // "ss_" + 32 hex chars
+
+	if len(key) != apiKeyLength {
+		return false
+	}
+	if len(key) < 3 || key[:3] != apiKeyPrefix {
+		return false
+	}
+
+	// Check that the rest is valid hex
+	for _, c := range key[3:] {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+
+	return true
 }
