@@ -611,3 +611,132 @@ func TestValidateAncestorSymlinkContainmentOutsideRoot(t *testing.T) {
 		t.Fatalf("expected outside_allowed_roots, got %s", v.Reason)
 	}
 }
+
+func TestMountBoundaryEnforced(t *testing.T) {
+	e := New()
+	cfg := core.SafetyConfig{
+		AllowedRoots:         []string{"/data"},
+		EnforceMountBoundary: true,
+	}
+
+	// Candidate on a different device than root
+	c := core.Candidate{
+		Root:         "/data",
+		Path:         "/data/mnt/external/file.log",
+		Type:         core.TargetFile,
+		DeviceID:     200, // Different device
+		RootDeviceID: 100, // Root's device
+	}
+
+	v := e.Validate(context.Background(), c, cfg)
+	if v.Allowed {
+		t.Fatalf("expected denied for different device, got allowed")
+	}
+	if v.Reason != "mount_boundary" {
+		t.Fatalf("expected mount_boundary, got %s", v.Reason)
+	}
+}
+
+func TestMountBoundaryAllowedSameDevice(t *testing.T) {
+	e := New()
+	cfg := core.SafetyConfig{
+		AllowedRoots:         []string{"/data"},
+		EnforceMountBoundary: true,
+	}
+
+	// Candidate on the same device as root
+	c := core.Candidate{
+		Root:         "/data",
+		Path:         "/data/work/file.log",
+		Type:         core.TargetFile,
+		DeviceID:     100, // Same device
+		RootDeviceID: 100, // Root's device
+	}
+
+	v := e.Validate(context.Background(), c, cfg)
+	if !v.Allowed {
+		t.Fatalf("expected allowed for same device, got denied: %s", v.Reason)
+	}
+}
+
+func TestMountBoundaryDisabled(t *testing.T) {
+	e := New()
+	cfg := core.SafetyConfig{
+		AllowedRoots:         []string{"/data"},
+		EnforceMountBoundary: false, // Disabled
+	}
+
+	// Candidate on a different device than root (should be allowed since check is disabled)
+	c := core.Candidate{
+		Root:         "/data",
+		Path:         "/data/mnt/external/file.log",
+		Type:         core.TargetFile,
+		DeviceID:     200, // Different device
+		RootDeviceID: 100, // Root's device
+	}
+
+	v := e.Validate(context.Background(), c, cfg)
+	if !v.Allowed {
+		t.Fatalf("expected allowed when mount boundary disabled, got denied: %s", v.Reason)
+	}
+}
+
+func TestMountBoundaryNoDeviceInfo(t *testing.T) {
+	e := New()
+	cfg := core.SafetyConfig{
+		AllowedRoots:         []string{"/data"},
+		EnforceMountBoundary: true,
+	}
+
+	// Candidate with no device info (zero values)
+	c := core.Candidate{
+		Root:         "/data",
+		Path:         "/data/work/file.log",
+		Type:         core.TargetFile,
+		DeviceID:     0, // No device info
+		RootDeviceID: 0, // No device info
+	}
+
+	v := e.Validate(context.Background(), c, cfg)
+	// Should be allowed - can't enforce without device info
+	if !v.Allowed {
+		t.Fatalf("expected allowed when no device info, got denied: %s", v.Reason)
+	}
+}
+
+func TestMountBoundaryPartialDeviceInfo(t *testing.T) {
+	e := New()
+	cfg := core.SafetyConfig{
+		AllowedRoots:         []string{"/data"},
+		EnforceMountBoundary: true,
+	}
+
+	tests := []struct {
+		name         string
+		deviceID     uint64
+		rootDeviceID uint64
+		expected     bool
+	}{
+		{"zero device ID", 0, 100, true},       // Skip check
+		{"zero root device ID", 100, 0, true},  // Skip check
+		{"both zero", 0, 0, true},              // Skip check
+		{"both non-zero same", 100, 100, true}, // Allow
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := core.Candidate{
+				Root:         "/data",
+				Path:         "/data/work/file.log",
+				Type:         core.TargetFile,
+				DeviceID:     tt.deviceID,
+				RootDeviceID: tt.rootDeviceID,
+			}
+
+			v := e.Validate(context.Background(), c, cfg)
+			if v.Allowed != tt.expected {
+				t.Errorf("expected allowed=%v, got allowed=%v (reason=%s)", tt.expected, v.Allowed, v.Reason)
+			}
+		})
+	}
+}

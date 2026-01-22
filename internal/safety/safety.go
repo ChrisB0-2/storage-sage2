@@ -82,6 +82,14 @@ func (e *Engine) Validate(_ context.Context, cand core.Candidate, cfg core.Safet
 		}
 
 	}
+
+	// 0b) Mount boundary enforcement
+	if cfg.EnforceMountBoundary && cand.RootDeviceID != 0 && cand.DeviceID != 0 {
+		if cand.DeviceID != cand.RootDeviceID {
+			return e.denyWithLog(candPath, "mount_boundary")
+		}
+	}
+
 	// 0) Type gate: dir deletion must be explicitly allowed.
 	if cand.Type == core.TargetDir && !cfg.AllowDirDelete {
 		return e.denyWithLog(candPath, "dir_delete_disabled")

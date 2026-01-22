@@ -103,8 +103,8 @@ func TestLokiLogger_BatchFlushOnSize(t *testing.T) {
 		loki.Info("message")
 	}
 
-	// Give async sender time to complete
-	time.Sleep(100 * time.Millisecond)
+	// Wait for send to complete
+	loki.WaitForSends()
 
 	if received.Load() < 1 {
 		t.Error("expected at least one batch to be sent")
@@ -124,14 +124,20 @@ func TestLokiLogger_BatchFlushOnTime(t *testing.T) {
 
 	loki := NewLokiLogger(NewNop(), LokiConfig{
 		URL:       server.URL,
-		BatchSize: 1000, // Large size so time triggers flush
-		BatchWait: 100 * time.Millisecond,
+		BatchSize: 1000,                  // Large size so time triggers flush
+		BatchWait: 50 * time.Millisecond, // Shorter for test
 	})
 
 	loki.Info("message")
 
-	// Wait for time-based flush
-	time.Sleep(200 * time.Millisecond)
+	// Poll with timeout instead of sleep
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if received.Load() >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if received.Load() < 1 {
 		t.Error("expected time-based flush to send batch")
@@ -157,14 +163,11 @@ func TestLokiLogger_FlushOnClose(t *testing.T) {
 
 	loki.Info("message before close")
 
-	// Close should flush
+	// Close should flush and wait for sends
 	err := loki.Close()
 	if err != nil {
 		t.Errorf("Close() error = %v", err)
 	}
-
-	// Give async sender time
-	time.Sleep(100 * time.Millisecond)
 
 	if received.Load() < 1 {
 		t.Error("expected flush on close")
@@ -197,7 +200,7 @@ func TestLokiLogger_RequestFormat(t *testing.T) {
 	})
 
 	loki.Info("test message", F("foo", "bar"))
-	time.Sleep(100 * time.Millisecond)
+	loki.WaitForSends()
 	loki.Close()
 
 	mu.Lock()
@@ -255,7 +258,7 @@ func TestLokiLogger_TenantHeader(t *testing.T) {
 	})
 
 	loki.Info("test")
-	time.Sleep(100 * time.Millisecond)
+	loki.WaitForSends()
 	loki.Close()
 
 	mu.Lock()
@@ -288,7 +291,7 @@ func TestLokiLogger_HandlesServerError(t *testing.T) {
 	})
 
 	loki.Info("test")
-	time.Sleep(100 * time.Millisecond)
+	loki.WaitForSends()
 	loki.Close()
 
 	bufMu.Lock()
@@ -359,4 +362,76 @@ func TestFormatLine(t *testing.T) {
 	if parsed["key1"] != "value1" {
 		t.Errorf("expected key1='value1', got: %v", parsed["key1"])
 	}
+}
+
+func TestLokiLogger_WaitForSends(t *testing.T) {
+	var received atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate slow server
+		time.Sleep(50 * time.Millisecond)
+		received.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	loki := NewLokiLogger(NewNop(), LokiConfig{
+		URL:       server.URL,
+		BatchSize: 1,
+		BatchWait: time.Hour,
+	})
+
+	// Send message which triggers immediate flush due to BatchSize=1
+	loki.Info("message")
+
+	// Before waiting, send should be in-flight
+	if received.Load() != 0 {
+		t.Error("expected send to be in-flight, not complete")
+	}
+
+	// WaitForSends should block until complete
+	loki.WaitForSends()
+
+	if received.Load() != 1 {
+		t.Errorf("expected 1 send after WaitForSends, got %d", received.Load())
+	}
+
+	loki.Close()
+}
+
+func TestLokiLogger_ConcurrentFlush(t *testing.T) {
+	var received atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	loki := NewLokiLogger(NewNop(), LokiConfig{
+		URL:       server.URL,
+		BatchSize: 1,
+		BatchWait: time.Hour,
+	})
+
+	// Send multiple messages concurrently
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			loki.Info("message", F("n", n))
+		}(i)
+	}
+	wg.Wait()
+
+	// Wait for all sends to complete
+	loki.WaitForSends()
+
+	// All messages should have been sent (each triggers flush due to BatchSize=1)
+	if received.Load() < 10 {
+		t.Errorf("expected at least 10 sends, got %d", received.Load())
+	}
+
+	loki.Close()
 }

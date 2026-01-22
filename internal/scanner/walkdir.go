@@ -69,6 +69,14 @@ func (s *WalkDirScanner) Scan(ctx context.Context, req core.ScanRequest) (<-chan
 				root = absRoot
 			}
 
+			// Get root device ID for mount boundary detection
+			var rootDeviceID uint64
+			if rootInfo, err := os.Lstat(root); err == nil {
+				if devID, ok := getDeviceID(rootInfo); ok {
+					rootDeviceID = devID
+				}
+			}
+
 			scanStart := time.Now()
 			walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
@@ -127,12 +135,18 @@ func (s *WalkDirScanner) Scan(ctx context.Context, req core.ScanRequest) (<-chan
 				}
 
 				c := core.Candidate{
-					Root:      root,
-					Path:      candPath,
-					Type:      tt,
-					ModTime:   info.ModTime(),
-					FoundAt:   time.Now(),
-					SizeBytes: size,
+					Root:         root,
+					Path:         candPath,
+					Type:         tt,
+					ModTime:      info.ModTime(),
+					FoundAt:      time.Now(),
+					SizeBytes:    size,
+					RootDeviceID: rootDeviceID,
+				}
+
+				// Extract file's device ID
+				if deviceID, ok := getDeviceID(info); ok {
+					c.DeviceID = deviceID
 				}
 
 				if d.Type()&fs.ModeSymlink != 0 {

@@ -219,3 +219,56 @@ func TestScanIncludesDirs(t *testing.T) {
 		t.Fatalf("expected 1 file, got %d", files)
 	}
 }
+
+func TestScanPopulatesDeviceID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("device ID extraction not supported on Windows")
+	}
+
+	dir := t.TempDir()
+
+	// Create a test file
+	testFile := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(testFile, []byte("test"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sc := NewWalkDir()
+	req := core.ScanRequest{
+		Roots:        []string{dir},
+		Recursive:    true,
+		IncludeFiles: true,
+		IncludeDirs:  true,
+	}
+
+	ctx := context.Background()
+	cands, errc := sc.Scan(ctx, req)
+
+	var rootDeviceID uint64
+	var fileDeviceID uint64
+	for c := range cands {
+		// Record root device ID (should be set on all candidates)
+		if rootDeviceID == 0 && c.RootDeviceID != 0 {
+			rootDeviceID = c.RootDeviceID
+		}
+		// Record file's device ID
+		if c.Type == core.TargetFile && c.DeviceID != 0 {
+			fileDeviceID = c.DeviceID
+		}
+	}
+
+	if err := <-errc; err != nil {
+		t.Fatalf("scan error: %v", err)
+	}
+
+	// On Unix, we should have device IDs populated
+	if rootDeviceID == 0 {
+		t.Error("expected RootDeviceID to be populated")
+	}
+	if fileDeviceID == 0 {
+		t.Error("expected DeviceID to be populated for file")
+	}
+	if rootDeviceID != fileDeviceID {
+		t.Errorf("expected same device ID for root and file in same filesystem: root=%d, file=%d", rootDeviceID, fileDeviceID)
+	}
+}

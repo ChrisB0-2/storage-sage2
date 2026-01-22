@@ -22,16 +22,17 @@ const (
 )
 
 type Candidate struct {
-	Root       string // absolute root that discovered this candidate
-	Path       string
-	Type       TargetType
-	Score      int // policy priority at time of action
-	SizeBytes  int64
-	ModTime    time.Time
-	IsSymlink  bool
-	LinkTarget string
-	DeviceID   uint64
-	FoundAt    time.Time
+	Root         string // absolute root that discovered this candidate
+	Path         string
+	Type         TargetType
+	Score        int // policy priority at time of action
+	SizeBytes    int64
+	ModTime      time.Time
+	IsSymlink    bool
+	LinkTarget   string
+	DeviceID     uint64
+	RootDeviceID uint64 // Device ID of the scan root
+	FoundAt      time.Time
 }
 
 type Decision struct {

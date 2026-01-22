@@ -51,6 +51,7 @@ type LokiLogger struct {
 	done     chan struct{}
 	shutdown chan struct{}
 	wg       sync.WaitGroup
+	sendWg   sync.WaitGroup // tracks in-flight send() goroutines
 }
 
 // NewLokiLogger creates a new LokiLogger that wraps the base logger.
@@ -185,7 +186,11 @@ func (l *LokiLogger) Flush() {
 	l.mu.Unlock()
 
 	// Send to Loki (non-blocking, errors logged to base logger)
-	go l.send(entries)
+	l.sendWg.Add(1)
+	go func() {
+		defer l.sendWg.Done()
+		l.send(entries)
+	}()
 }
 
 // send pushes log entries to Loki.
@@ -286,10 +291,11 @@ func (l *LokiLogger) formatLine(entry lokiEntry) string {
 func (l *LokiLogger) Close() error {
 	close(l.shutdown)
 
-	// Wait for flusher to finish with timeout
+	// Wait for flusher and in-flight sends to finish with timeout
 	done := make(chan struct{})
 	go func() {
-		l.wg.Wait()
+		l.wg.Wait()     // Wait for flusher
+		l.sendWg.Wait() // Wait for in-flight sends
 		close(done)
 	}()
 
@@ -299,4 +305,10 @@ func (l *LokiLogger) Close() error {
 	case <-time.After(10 * time.Second):
 		return fmt.Errorf("loki: shutdown timed out")
 	}
+}
+
+// WaitForSends blocks until all in-flight send operations complete.
+// Useful for testing to ensure sends finish before assertions.
+func (l *LokiLogger) WaitForSends() {
+	l.sendWg.Wait()
 }

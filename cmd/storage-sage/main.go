@@ -757,9 +757,10 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 
 	// Safety config
 	safetyCfg := core.SafetyConfig{
-		AllowedRoots:   cfg.Scan.Roots,
-		ProtectedPaths: cfg.Safety.ProtectedPaths,
-		AllowDirDelete: cfg.Safety.AllowDirDelete,
+		AllowedRoots:         cfg.Scan.Roots,
+		ProtectedPaths:       cfg.Safety.ProtectedPaths,
+		AllowDirDelete:       cfg.Safety.AllowDirDelete,
+		EnforceMountBoundary: cfg.Safety.EnforceMountBoundary,
 	}
 
 	req := core.ScanRequest{
