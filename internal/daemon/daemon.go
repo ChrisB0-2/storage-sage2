@@ -375,12 +375,13 @@ func (d *Daemon) startHTTP() error {
 	// Serve embedded frontend (SPA with fallback to index.html)
 	d.setupStaticFileServer(mux)
 
-	// Wrap handler with authentication middleware if configured
+	// Wrap handler with middleware (order matters: auth runs first, then RBAC)
 	var handler http.Handler = mux
 	if d.rbacMiddleware != nil {
 		handler = d.rbacMiddleware.Wrap(handler)
 	}
 	if d.authMiddleware != nil {
+		// Auth must wrap outermost so it runs first and sets Identity in context
 		handler = d.authMiddleware.Wrap(handler)
 	}
 

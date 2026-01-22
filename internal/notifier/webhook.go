@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -129,6 +130,7 @@ type Notifier interface {
 
 // MultiNotifier sends notifications to multiple endpoints
 type MultiNotifier struct {
+	mu        sync.RWMutex
 	notifiers []Notifier
 }
 
@@ -139,8 +141,13 @@ func NewMultiNotifier(notifiers ...Notifier) *MultiNotifier {
 
 // Notify sends to all configured notifiers, collecting errors
 func (m *MultiNotifier) Notify(ctx context.Context, payload WebhookPayload) error {
+	m.mu.RLock()
+	notifiers := make([]Notifier, len(m.notifiers))
+	copy(notifiers, m.notifiers)
+	m.mu.RUnlock()
+
 	var errs []error
-	for _, n := range m.notifiers {
+	for _, n := range notifiers {
 		if err := n.Notify(ctx, payload); err != nil {
 			errs = append(errs, err)
 		}
@@ -154,7 +161,9 @@ func (m *MultiNotifier) Notify(ctx context.Context, payload WebhookPayload) erro
 
 // Add adds a notifier to the multi-notifier
 func (m *MultiNotifier) Add(n Notifier) {
+	m.mu.Lock()
 	m.notifiers = append(m.notifiers, n)
+	m.mu.Unlock()
 }
 
 // NoopNotifier does nothing (for when notifications are disabled)

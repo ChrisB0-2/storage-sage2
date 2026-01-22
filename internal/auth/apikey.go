@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -268,21 +269,11 @@ func SecureCompare(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// GenerateAPIKey generates a new random API key.
-// Note: This is provided for convenience but is not cryptographically secure
-// for production use. Use a proper random source for production keys.
+// GenerateAPIKey generates a new cryptographically secure random API key.
 func GenerateAPIKey() (string, error) {
 	bytes := make([]byte, 16)
-	// Read from crypto/rand
-	f, err := os.Open("/dev/urandom")
-	if err != nil {
-		return "", err
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate random bytes: %w", err)
 	}
-	defer f.Close()
-
-	if _, err := f.Read(bytes); err != nil {
-		return "", err
-	}
-
 	return APIKeyPrefix + hex.EncodeToString(bytes), nil
 }
