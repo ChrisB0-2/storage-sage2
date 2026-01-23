@@ -677,9 +677,15 @@ func getDiskUsagePercent(path string) (float64, error) {
 		return 0, err
 	}
 
+	// Bsize is int64 on Linux; ensure it's positive before converting to uint64
+	if stat.Bsize <= 0 {
+		return 0, fmt.Errorf("invalid block size: %d", stat.Bsize)
+	}
+	bsize := uint64(stat.Bsize)
+
 	// Total and available blocks
-	total := stat.Blocks * uint64(stat.Bsize)
-	avail := stat.Bavail * uint64(stat.Bsize)
+	total := stat.Blocks * bsize
+	avail := stat.Bavail * bsize
 
 	if total == 0 {
 		return 0, nil
