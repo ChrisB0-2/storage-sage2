@@ -23,6 +23,7 @@ Most cleanup tools are "delete first, regret later." Storage-Sage inverts this:
 - **Audit logging**: JSONL audit trail of all decisions and actions
 - **Dry-run mode**: Preview what would be deleted before executing
 - **Daemon mode**: Run as a long-running service with scheduled cleanup
+- **Soft-delete**: Move files to trash instead of permanent deletion, with restore capability
 - **Prometheus metrics**: Built-in metrics endpoint for monitoring
 - **Zero dependencies**: Pure Go standard library for maximum reliability (plus optional Prometheus)
 
@@ -150,6 +151,8 @@ Time-of-check-time-of-use attacks are prevented by re-running all safety checks 
 | `-daemon` | `false` | Run as long-running daemon |
 | `-schedule` | | Cleanup schedule (e.g., `1h`, `30m`, `@every 6h`) |
 | `-daemon-addr` | `:8080` | Daemon HTTP endpoint address |
+| `-trash-path` | | Move files to trash instead of permanent delete |
+| `-pid-file` | | PID file path for single-instance enforcement |
 
 ## Policy System
 
@@ -568,6 +571,130 @@ notifications:
 ### Slack Integration
 
 For Slack, use an incoming webhook URL. The payload is JSON-formatted and can be parsed by Slack workflows or custom handlers.
+
+## Soft-Delete / Trash
+
+Storage-Sage supports soft-delete mode where files are moved to a trash directory instead of being permanently deleted. This provides a safety net allowing recovery of accidentally deleted files.
+
+### Enabling Soft-Delete
+
+```bash
+# Delete files to trash instead of permanent deletion
+storage-sage -root /tmp -mode execute -trash-path /var/lib/storage-sage/trash
+
+# With audit logging
+storage-sage -root /data/cache -mode execute -trash-path /var/lib/storage-sage/trash -audit /var/log/storage-sage.jsonl
+```
+
+### Configuration File
+
+```yaml
+execution:
+  mode: execute
+  trash_path: /var/lib/storage-sage/trash
+  trash_max_age: 168h  # Auto-cleanup after 7 days (optional)
+```
+
+### How It Works
+
+When soft-delete is enabled:
+1. Files are moved to the trash directory (not copied)
+2. A `.meta` file is created with original path, timestamp, and file metadata
+3. Files retain their original names with a timestamp and hash prefix for uniqueness
+4. Cross-filesystem moves are handled automatically (copy + delete)
+
+### Trash CLI Commands
+
+Storage-Sage provides CLI commands to manage trashed files:
+
+#### List Trash Contents
+
+```bash
+# List all items in trash
+storage-sage trash list -path /var/lib/storage-sage/trash
+
+# Output as JSON
+storage-sage trash list -path /var/lib/storage-sage/trash -json
+
+# Use trash path from config file
+storage-sage trash list -config /etc/storage-sage/config.yaml
+```
+
+Example output:
+```
+Trash directory: /var/lib/storage-sage/trash
+Items: 3
+
+Total size: 1.5 MB
+
+NAME                                      SIZE        TRASHED AT            ORIGINAL PATH
+----------------------------------------------------------------------------------------------------
+20240115-103000_abc12345_old-log.txt      512 KB      2024-01-15 10:30:00   /var/log/myapp/old-log.txt
+20240115-103001_def67890_cache.dat        1.0 MB      2024-01-15 10:30:01   /tmp/cache.dat
+20240114-090000_ghi11111_backup.tar       256 B       2024-01-14 09:00:00   /data/backup.tar
+```
+
+#### Restore Files
+
+```bash
+# Restore a specific item to its original location
+storage-sage trash restore -path /var/lib/storage-sage/trash -item 20240115-103000_abc12345_old-log.txt
+
+# Force overwrite if destination exists
+storage-sage trash restore -path /var/lib/storage-sage/trash -item 20240115-103000_abc12345_old-log.txt -force
+```
+
+#### Empty Trash
+
+```bash
+# Delete items older than 7 days
+storage-sage trash empty -path /var/lib/storage-sage/trash -older-than 7d
+
+# Delete items older than 24 hours
+storage-sage trash empty -path /var/lib/storage-sage/trash -older-than 24h
+
+# Preview what would be deleted (dry-run)
+storage-sage trash empty -path /var/lib/storage-sage/trash -older-than 7d -dry-run
+
+# Delete ALL items (with confirmation)
+storage-sage trash empty -path /var/lib/storage-sage/trash -all
+
+# Delete ALL items without confirmation
+storage-sage trash empty -path /var/lib/storage-sage/trash -all -force
+```
+
+### Automatic Trash Cleanup
+
+When `trash_max_age` is configured, the daemon automatically cleans up old trash items during each run:
+
+```yaml
+execution:
+  trash_path: /var/lib/storage-sage/trash
+  trash_max_age: 168h  # 7 days
+```
+
+### Trash Directory Structure
+
+```
+/var/lib/storage-sage/trash/
+├── 20240115-103000_abc12345_old-log.txt       # Trashed file
+├── 20240115-103000_abc12345_old-log.txt.meta  # Metadata
+├── 20240115-103001_def67890_cache.dat
+├── 20240115-103001_def67890_cache.dat.meta
+└── 20240114-090000_ghi11111_mydir/            # Trashed directory
+    ├── file1.txt
+    └── subdir/
+        └── file2.txt
+```
+
+Metadata files contain:
+```
+original_path: /var/log/myapp/old-log.txt
+trashed_at: 2024-01-15T10:30:00Z
+size: 524288
+mode: -rw-r--r--
+mod_time: 2024-01-10T08:00:00Z
+```
 
 ## Architecture
 
