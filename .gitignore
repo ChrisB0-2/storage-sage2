@@ -29,3 +29,6 @@ internal/web/dist/assets/
 # Environment files
 .env
 .env.local
+
+# Test data / fixtures
+/data/
