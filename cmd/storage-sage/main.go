@@ -192,7 +192,10 @@ func runQueryCmd(args []string) {
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(records)
+		if err := enc.Encode(records); err != nil {
+			fmt.Fprintf(os.Stderr, "error: failed to encode JSON: %v\n", err)
+			os.Exit(1)
+		}
 	} else {
 		fmt.Printf("Found %d records:\n\n", len(records))
 		for _, r := range records {
@@ -246,7 +249,10 @@ func runStatsCmd(args []string) {
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		_ = enc.Encode(stats)
+		if err := enc.Encode(stats); err != nil {
+			fmt.Fprintf(os.Stderr, "error: failed to encode JSON: %v\n", err)
+			os.Exit(1)
+		}
 	} else {
 		fmt.Println("Audit Database Statistics")
 		fmt.Println("=========================")

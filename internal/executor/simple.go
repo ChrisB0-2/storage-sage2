@@ -263,6 +263,12 @@ func (e *Simple) record(ctx context.Context, item core.PlanItem, res core.Action
 	}
 
 	// Best-effort: auditing must never break deletion.
-	defer func() { _ = recover() }()
+	defer func() {
+		if r := recover(); r != nil {
+			e.log.Error("audit record panic recovered",
+				logger.F("panic", r),
+				logger.F("path", res.Path))
+		}
+	}()
 	e.aud.Record(ctx, evt)
 }

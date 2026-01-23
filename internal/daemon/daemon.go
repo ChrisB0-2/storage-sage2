@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -76,6 +77,7 @@ type Daemon struct {
 	runCount   int64
 	mu         sync.RWMutex
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 	httpServer *http.Server
 }
 
@@ -189,7 +191,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 // Stop signals the daemon to shut down.
 func (d *Daemon) Stop() {
-	close(d.stopCh)
+	d.stopOnce.Do(func() {
+		close(d.stopCh)
+	})
 }
 
 // TriggerRun manually triggers a run (for API use).
@@ -332,7 +336,7 @@ func (d *Daemon) startHTTP() error {
 			lastRunStr = lastRun.Format(time.RFC3339)
 		}
 
-		writeJSONResponse(w, http.StatusOK, map[string]any{
+		d.writeJSONResponse(w, http.StatusOK, map[string]any{
 			"state":      d.State().String(),
 			"running":    d.IsRunning(),
 			"last_run":   lastRunStr,
@@ -357,14 +361,14 @@ func (d *Daemon) startHTTP() error {
 		defer cancel()
 
 		if err := d.TriggerRun(ctx); err != nil {
-			writeJSONResponse(w, http.StatusConflict, map[string]any{
+			d.writeJSONResponse(w, http.StatusConflict, map[string]any{
 				"triggered": false,
 				"error":     err.Error(),
 			})
 			return
 		}
 
-		writeJSONResponse(w, http.StatusOK, map[string]any{"triggered": true})
+		d.writeJSONResponse(w, http.StatusOK, map[string]any{"triggered": true})
 	})
 
 	// API endpoints for frontend
@@ -386,20 +390,22 @@ func (d *Daemon) startHTTP() error {
 	}
 
 	d.httpServer = &http.Server{
-		Addr:              d.httpAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Start server in goroutine
+	// Create listener first to ensure port is available before returning
+	ln, err := net.Listen("tcp", d.httpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s: %w", d.httpAddr, err)
+	}
+
+	// Start server in goroutine with the already-bound listener
 	go func() {
-		if err := d.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := d.httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			d.log.Error("HTTP server error", logger.F("error", err.Error()))
 		}
 	}()
-
-	// Give the server a moment to start
-	time.Sleep(50 * time.Millisecond)
 
 	return nil
 }
@@ -415,12 +421,12 @@ func (d *Daemon) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if d.cfg == nil {
-		writeJSONError(w, http.StatusNotFound, "config not available")
+		d.writeJSONError(w, http.StatusNotFound, "config not available")
 		return
 	}
 
 	// Return config as JSON
-	writeJSONResponse(w, http.StatusOK, d.cfg)
+	d.writeJSONResponse(w, http.StatusOK, d.cfg)
 }
 
 // Valid values for audit query filters.
@@ -443,7 +449,7 @@ func (d *Daemon) handleAuditQuery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if d.auditor == nil {
-		writeJSONError(w, http.StatusNotFound, "auditor not available")
+		d.writeJSONError(w, http.StatusNotFound, "auditor not available")
 		return
 	}
 
@@ -453,14 +459,14 @@ func (d *Daemon) handleAuditQuery(w http.ResponseWriter, r *http.Request) {
 	// Validate action parameter
 	action := q.Get("action")
 	if !validActions[action] {
-		writeJSONError(w, http.StatusBadRequest, "invalid action: must be one of plan, execute, error")
+		d.writeJSONError(w, http.StatusBadRequest, "invalid action: must be one of plan, execute, error")
 		return
 	}
 
 	// Validate level parameter
 	level := q.Get("level")
 	if !validLevels[level] {
-		writeJSONError(w, http.StatusBadRequest, "invalid level: must be one of debug, info, warn, error")
+		d.writeJSONError(w, http.StatusBadRequest, "invalid level: must be one of debug, info, warn, error")
 		return
 	}
 
@@ -487,7 +493,7 @@ func (d *Daemon) handleAuditQuery(w http.ResponseWriter, r *http.Request) {
 	if limitStr := q.Get("limit"); limitStr != "" {
 		limit, err := strconv.Atoi(limitStr)
 		if err != nil || limit < 1 {
-			writeJSONError(w, http.StatusBadRequest, "invalid limit: must be a positive integer")
+			d.writeJSONError(w, http.StatusBadRequest, "invalid limit: must be a positive integer")
 			return
 		}
 		if limit > maxQueryLimit {
@@ -499,12 +505,12 @@ func (d *Daemon) handleAuditQuery(w http.ResponseWriter, r *http.Request) {
 	// Query audit records
 	records, err := d.auditor.Query(r.Context(), filter)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+		d.writeJSONError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
 
 	// Return records as JSON
-	writeJSONResponse(w, http.StatusOK, records)
+	d.writeJSONResponse(w, http.StatusOK, records)
 }
 
 // handleAuditStats returns audit statistics summary.
@@ -518,18 +524,18 @@ func (d *Daemon) handleAuditStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if d.auditor == nil {
-		writeJSONError(w, http.StatusNotFound, "auditor not available")
+		d.writeJSONError(w, http.StatusNotFound, "auditor not available")
 		return
 	}
 
 	stats, err := d.auditor.Stats(r.Context())
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "stats failed: "+err.Error())
+		d.writeJSONError(w, http.StatusInternalServerError, "stats failed: "+err.Error())
 		return
 	}
 
 	// Return stats as JSON
-	writeJSONResponse(w, http.StatusOK, stats)
+	d.writeJSONResponse(w, http.StatusOK, stats)
 }
 
 // setupStaticFileServer configures the mux to serve embedded frontend files.
@@ -590,16 +596,20 @@ func (d *Daemon) setupStaticFileServer(mux *http.ServeMux) {
 }
 
 // writeJSONError writes a JSON error response with properly escaped message.
-func writeJSONError(w http.ResponseWriter, status int, message string) {
+func (d *Daemon) writeJSONError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	resp := map[string]string{"error": message}
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		d.log.Error("failed to encode JSON error response", logger.F("error", err.Error()))
+	}
 }
 
 // writeJSONResponse writes a JSON response with the given data.
-func writeJSONResponse(w http.ResponseWriter, status int, data any) {
+func (d *Daemon) writeJSONResponse(w http.ResponseWriter, status int, data any) {
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		d.log.Error("failed to encode JSON response", logger.F("error", err.Error()))
+	}
 }
 
 // parseTimeParam parses a time parameter from various formats.
