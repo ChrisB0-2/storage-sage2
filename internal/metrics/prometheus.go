@@ -31,6 +31,9 @@ type Prometheus struct {
 	// System metrics
 	diskUsage prometheus.Gauge
 	cpuUsage  prometheus.Gauge
+
+	// Daemon metrics
+	lastRunTimestamp prometheus.Gauge
 }
 
 // NewPrometheus creates a new Prometheus metrics collector.
@@ -139,6 +142,14 @@ func NewPrometheus(reg prometheus.Registerer) *Prometheus {
 			Name:      "cpu_usage_percent",
 			Help:      "Current CPU usage percentage",
 		}),
+
+		// Daemon metrics
+		lastRunTimestamp: factory.NewGauge(prometheus.GaugeOpts{
+			Namespace: "storagesage",
+			Subsystem: "daemon",
+			Name:      "last_run_timestamp_seconds",
+			Help:      "Unix timestamp of the last successful cleanup run",
+		}),
 	}
 }
 
@@ -200,6 +211,12 @@ func (p *Prometheus) SetDiskUsage(percent float64) {
 
 func (p *Prometheus) SetCPUUsage(percent float64) {
 	p.cpuUsage.Set(percent)
+}
+
+// Daemon metrics
+
+func (p *Prometheus) SetLastRunTimestamp(t time.Time) {
+	p.lastRunTimestamp.Set(float64(t.Unix()))
 }
 
 func boolStr(b bool) string {

@@ -307,18 +307,39 @@ func (d *Daemon) startHTTP() error {
 		_, _ = fmt.Fprintf(w, `{"status":"ok","state":"%s"}`, d.State().String())
 	})
 
-	// Ready endpoint - readiness check (not ready if stopping/stopped)
+	// Ready endpoint - readiness check (not ready if stopping/stopped or disk critically full)
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
 		state := d.State()
 		w.Header().Set("Content-Type", "application/json")
 
-		if state == StateReady || state == StateRunning {
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, `{"ready":true,"state":"%s"}`, state.String())
-		} else {
+		// Check if daemon is in a ready state
+		if state != StateReady && state != StateRunning {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = fmt.Fprintf(w, `{"ready":false,"state":"%s"}`, state.String())
+			_, _ = fmt.Fprintf(w, `{"ready":false,"state":"%s","reason":"daemon not ready"}`, state.String())
+			return
 		}
+
+		// Check disk space on scan roots if config is available
+		if d.cfg != nil && len(d.cfg.Scan.Roots) > 0 {
+			for _, root := range d.cfg.Scan.Roots {
+				usedPct, err := getDiskUsagePercent(root)
+				if err != nil {
+					// Log but don't fail readiness for inaccessible paths
+					d.log.Warn("disk check failed", logger.F("path", root), logger.F("error", err.Error()))
+					continue
+				}
+				// Fail readiness if disk is critically full (>95%)
+				if usedPct > 95.0 {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = fmt.Fprintf(w, `{"ready":false,"state":"%s","reason":"disk critically full","path":"%s","disk_used_percent":%.1f}`,
+						state.String(), root, usedPct)
+					return
+				}
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"ready":true,"state":"%s"}`, state.String())
 	})
 
 	// Status endpoint - detailed status information
@@ -647,4 +668,24 @@ func parseTimeParam(s string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("invalid time format: %s", s)
+}
+
+// getDiskUsagePercent returns the disk usage percentage for the given path.
+func getDiskUsagePercent(path string) (float64, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, err
+	}
+
+	// Total and available blocks
+	total := stat.Blocks * uint64(stat.Bsize)
+	avail := stat.Bavail * uint64(stat.Bsize)
+
+	if total == 0 {
+		return 0, nil
+	}
+
+	used := total - avail
+	usedPct := (float64(used) / float64(total)) * 100.0
+	return usedPct, nil
 }

@@ -412,6 +412,7 @@ func (m *mockMetrics) AddBytesFreed(bytes int64)                        { m.byte
 func (m *mockMetrics) IncDeleteErrors(reason string)                    { m.deleteErrors[reason]++ }
 func (m *mockMetrics) SetDiskUsage(percent float64)                     {}
 func (m *mockMetrics) SetCPUUsage(percent float64)                      {}
+func (m *mockMetrics) SetLastRunTimestamp(t time.Time)                  {}
 
 // mockAuditor implements core.Auditor for testing
 type mockAuditor struct {

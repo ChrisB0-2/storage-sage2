@@ -225,6 +225,7 @@ func (n *noopMetrics) AddBytesFreed(bytes int64)                        {}
 func (n *noopMetrics) IncDeleteErrors(reason string)                    {}
 func (n *noopMetrics) SetDiskUsage(percent float64)                     {}
 func (n *noopMetrics) SetCPUUsage(percent float64)                      {}
+func (n *noopMetrics) SetLastRunTimestamp(t time.Time)                  {}
 
 // formatNumber formats a number as a zero-padded string
 func formatNumber(n int) string {

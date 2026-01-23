@@ -36,5 +36,8 @@ func (Noop) IncDeleteErrors(string) {}
 func (Noop) SetDiskUsage(float64) {}
 func (Noop) SetCPUUsage(float64)  {}
 
+// Daemon metrics
+func (Noop) SetLastRunTimestamp(time.Time) {}
+
 // Ensure Noop implements core.Metrics
 var _ core.Metrics = (*Noop)(nil)

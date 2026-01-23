@@ -76,6 +76,9 @@ func main() {
 		case "verify":
 			runVerifyCmd(os.Args[2:])
 			return
+		case "validate":
+			runValidateCmd(os.Args[2:])
+			return
 		}
 	}
 
@@ -307,6 +310,65 @@ func runVerifyCmd(args []string) {
 	}
 }
 
+// runValidateCmd handles the "validate" subcommand for config validation.
+func runValidateCmd(args []string) {
+	fs := flag.NewFlagSet("validate", flag.ExitOnError)
+	configFile := fs.String("config", "", "path to configuration file (required)")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: storage-sage validate [options]\n\nValidate a configuration file without running cleanup.\n\nOptions:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage validate -config /etc/storage-sage/config.yaml\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage validate -config ./config.yaml\n")
+	}
+
+	_ = fs.Parse(args)
+
+	if *configFile == "" {
+		fmt.Fprintf(os.Stderr, "error: -config is required\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	// Load the configuration file
+	cfg, err := config.Load(*configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL: failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Validate the configuration
+	if err := config.Validate(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "FAIL: %v", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("OK: configuration file %q is valid\n", *configFile)
+	fmt.Printf("\nConfiguration summary:\n")
+	fmt.Printf("  Roots:         %v\n", cfg.Scan.Roots)
+	fmt.Printf("  Mode:          %s\n", cfg.Execution.Mode)
+	fmt.Printf("  Min age:       %d days\n", cfg.Policy.MinAgeDays)
+	if cfg.Policy.MinSizeMB > 0 {
+		fmt.Printf("  Min size:      %d MB\n", cfg.Policy.MinSizeMB)
+	}
+	if len(cfg.Policy.Extensions) > 0 {
+		fmt.Printf("  Extensions:    %v\n", cfg.Policy.Extensions)
+	}
+	if len(cfg.Policy.Exclusions) > 0 {
+		fmt.Printf("  Exclusions:    %v\n", cfg.Policy.Exclusions)
+	}
+	if cfg.Daemon.Enabled {
+		fmt.Printf("  Daemon:        enabled (schedule: %s)\n", cfg.Daemon.Schedule)
+	}
+	if cfg.Metrics.Enabled {
+		fmt.Printf("  Metrics:       enabled\n")
+	}
+	if cfg.Auth != nil && cfg.Auth.Enabled {
+		fmt.Printf("  Auth:          enabled\n")
+	}
+}
+
 // parseTimeArg parses a time argument like "24h", "7d", or "2024-01-01"
 func parseTimeArg(s string) time.Time {
 	// Try duration format first (e.g., "24h", "7d")
@@ -468,6 +530,8 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		} else {
 			payload.Event = notifier.EventCleanupCompleted
 			payload.Message = "Cleanup completed successfully"
+			// Record successful run timestamp for metrics
+			m.SetLastRunTimestamp(time.Now())
 		}
 
 		_ = notify.Notify(ctx, payload)

@@ -145,6 +145,9 @@ type Metrics interface {
 	// System metrics
 	SetDiskUsage(percent float64)
 	SetCPUUsage(percent float64)
+
+	// Daemon metrics
+	SetLastRunTimestamp(t time.Time)
 }
 
 type EnvProvider interface {
