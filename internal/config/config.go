@@ -60,6 +60,8 @@ type ExecutionConfig struct {
 	AuditPath   string        `yaml:"audit_path" json:"audit_path"`       // JSONL file path
 	AuditDBPath string        `yaml:"audit_db_path" json:"audit_db_path"` // SQLite database path
 	MaxItems    int           `yaml:"max_items" json:"max_items"`
+	TrashPath   string        `yaml:"trash_path" json:"trash_path"`       // Soft-delete: move files here instead of deleting
+	TrashMaxAge time.Duration `yaml:"trash_max_age" json:"trash_max_age"` // Max age before trash is permanently deleted (0 = keep forever)
 }
 
 // LoggingConfig configures logging behavior.
@@ -87,6 +89,7 @@ type DaemonConfig struct {
 	MetricsAddr    string        `yaml:"metrics_addr" json:"metrics_addr"`
 	Schedule       string        `yaml:"schedule" json:"schedule"`               // cron expression
 	TriggerTimeout time.Duration `yaml:"trigger_timeout" json:"trigger_timeout"` // timeout for manual /trigger requests
+	PIDFile        string        `yaml:"pid_file" json:"pid_file"`               // PID file path for single-instance enforcement
 }
 
 // MetricsConfig configures Prometheus metrics.
@@ -160,10 +163,12 @@ func Default() *Config {
 			EnforceMountBoundary: false,
 		},
 		Execution: ExecutionConfig{
-			Mode:      "dry-run",
-			Timeout:   30 * time.Second,
-			AuditPath: "",
-			MaxItems:  25,
+			Mode:        "dry-run",
+			Timeout:     30 * time.Second,
+			AuditPath:   "",
+			MaxItems:    25,
+			TrashPath:   "",                 // Empty = permanent delete (no soft-delete)
+			TrashMaxAge: 7 * 24 * time.Hour, // 7 days default if trash is enabled
 		},
 		Logging: LoggingConfig{
 			Level:  "info",
@@ -186,6 +191,7 @@ func Default() *Config {
 			MetricsAddr:    ":9090",
 			Schedule:       "",
 			TriggerTimeout: 30 * time.Minute,
+			PIDFile:        "", // Empty = no PID file
 		},
 		Metrics: MetricsConfig{
 			Enabled:   false,

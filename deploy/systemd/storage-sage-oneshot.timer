@@ -1,0 +1,14 @@
+[Unit]
+Description=Storage Sage - Scheduled Storage Cleanup
+Documentation=https://github.com/ChrisB0-2/storage-sage
+
+[Timer]
+# Run daily at 3 AM
+OnCalendar=*-*-* 03:00:00
+# Randomize start time by up to 30 minutes to avoid thundering herd
+RandomizedDelaySec=1800
+# Run immediately if a scheduled run was missed (e.g., system was off)
+Persistent=true
+
+[Install]
+WantedBy=timers.target

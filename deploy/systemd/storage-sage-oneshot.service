@@ -1,0 +1,27 @@
+[Unit]
+Description=Storage Sage - One-shot Storage Cleanup
+Documentation=https://github.com/ChrisB0-2/storage-sage
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=storage-sage
+Group=storage-sage
+
+ExecStart=/usr/local/bin/storage-sage -config /etc/storage-sage/config.yaml -mode execute
+
+# Security hardening (same as daemon)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+ReadWritePaths=/var/lib/storage-sage /var/log/storage-sage
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=storage-sage

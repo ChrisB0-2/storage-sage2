@@ -20,6 +20,7 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/auth"
 	"github.com/ChrisB0-2/storage-sage/internal/config"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
+	"github.com/ChrisB0-2/storage-sage/internal/pidfile"
 	"github.com/ChrisB0-2/storage-sage/internal/web"
 )
 
@@ -61,6 +62,7 @@ type Daemon struct {
 	schedule       string
 	httpAddr       string
 	triggerTimeout time.Duration
+	pidFilePath    string
 
 	// Optional references for API endpoints
 	cfg     *config.Config
@@ -79,6 +81,7 @@ type Daemon struct {
 	stopCh     chan struct{}
 	stopOnce   sync.Once
 	httpServer *http.Server
+	pidFile    *pidfile.PIDFile
 }
 
 // Config holds daemon configuration.
@@ -86,6 +89,7 @@ type Config struct {
 	Schedule       string        // Cron expression (e.g., "0 */6 * * *" for every 6 hours)
 	HTTPAddr       string        // Address for health/ready endpoints (e.g., ":8080")
 	TriggerTimeout time.Duration // Timeout for manual trigger requests (default: 30m)
+	PIDFile        string        // Path to PID file for single-instance enforcement
 
 	// Optional: references for API endpoints
 	AppConfig *config.Config         // Application config to expose via /api/config
@@ -114,6 +118,7 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 		schedule:       cfg.Schedule,
 		httpAddr:       cfg.HTTPAddr,
 		triggerTimeout: cfg.TriggerTimeout,
+		pidFilePath:    cfg.PIDFile,
 		cfg:            cfg.AppConfig,
 		auditor:        cfg.Auditor,
 		authMiddleware: cfg.AuthMiddleware,
@@ -129,6 +134,25 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 // It handles SIGINT and SIGTERM for graceful shutdown.
 func (d *Daemon) Run(ctx context.Context) error {
 	d.log.Info("daemon starting", logger.F("http_addr", d.httpAddr), logger.F("schedule", d.schedule))
+
+	// Acquire PID file lock (prevents multiple instances)
+	if d.pidFilePath != "" {
+		pf, err := pidfile.New(d.pidFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to acquire pid file lock: %w", err)
+		}
+		d.pidFile = pf
+		d.log.Info("pid file acquired", logger.F("path", d.pidFilePath))
+
+		// Ensure PID file is released on exit
+		defer func() {
+			if err := d.pidFile.Close(); err != nil {
+				d.log.Warn("failed to release pid file", logger.F("error", err.Error()))
+			} else {
+				d.log.Debug("pid file released")
+			}
+		}()
+	}
 
 	// Set up signal handling
 	sigCh := make(chan os.Signal, 1)

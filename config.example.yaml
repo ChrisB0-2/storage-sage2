@@ -1,0 +1,199 @@
+# Storage Sage Configuration Example
+# Copy to /etc/storage-sage/config.yaml and adjust for your environment
+#
+# All durations use Go syntax: "30s", "5m", "1h", "24h"
+
+version: 1
+
+# =============================================================================
+# Scan Configuration
+# =============================================================================
+scan:
+  # Directories to scan for cleanup candidates
+  # WARNING: Only specify directories you want cleaned!
+  roots:
+    - /var/log/myapp
+    - /tmp/build-artifacts
+
+  # Recurse into subdirectories
+  recursive: true
+
+  # Maximum directory depth (0 = unlimited)
+  max_depth: 0
+
+  # Include files in scan results (usually true)
+  include_files: true
+
+  # Include empty directories in scan (requires allow_dir_delete in safety)
+  include_dirs: false
+
+# =============================================================================
+# Policy Configuration - What files to delete
+# =============================================================================
+policy:
+  # Minimum file age in days before eligible for deletion
+  # Files modified more recently than this are protected
+  min_age_days: 30
+
+  # Minimum file size in MB (0 = no minimum)
+  # Useful for targeting large files only
+  min_size_mb: 0
+
+  # Only delete files with these extensions (empty = all extensions)
+  # Include the dot: [".log", ".tmp", ".bak"]
+  extensions: []
+
+  # Glob patterns to exclude from deletion
+  # Files matching ANY pattern are protected
+  exclusions:
+    - "*.important"
+    - "keep-*"
+    - ".gitkeep"
+
+# =============================================================================
+# Safety Configuration - Guardrails
+# =============================================================================
+safety:
+  # Paths that are NEVER deleted, regardless of other settings
+  # Protects critical system directories
+  protected_paths:
+    - /boot
+    - /etc
+    - /usr
+    - /var
+    - /sys
+    - /proc
+    - /dev
+    - /home
+
+  # Allow deletion of empty directories
+  # Requires include_dirs: true in scan config
+  allow_dir_delete: false
+
+  # Prevent deletion across filesystem boundaries
+  # Protects against deleting into mounted volumes
+  enforce_mount_boundary: false
+
+# =============================================================================
+# Execution Configuration
+# =============================================================================
+execution:
+  # Mode: "dry-run" (report only) or "execute" (actually delete)
+  # ALWAYS test with dry-run first!
+  mode: dry-run
+
+  # Maximum time for a single cleanup run
+  timeout: 5m
+
+  # Path for JSONL audit log (append-only)
+  audit_path: /var/log/storage-sage/audit.jsonl
+
+  # Path for SQLite audit database (queryable)
+  audit_db_path: /var/lib/storage-sage/audit.db
+
+  # Maximum items to display in output
+  max_items: 50
+
+  # Soft-delete: move files to trash instead of permanent deletion
+  # Files can be recovered from trash_path until trash_max_age
+  trash_path: /var/lib/storage-sage/trash
+
+  # Maximum age of trashed files before permanent deletion (0 = keep forever)
+  trash_max_age: 168h  # 7 days
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging:
+  # Log level: debug, info, warn, error
+  level: info
+
+  # Output format: json (structured) or text (human-readable)
+  format: json
+
+  # Output destination: stderr, stdout, or file path
+  output: stderr
+
+  # Optional: Ship logs to Loki
+  # loki:
+  #   enabled: true
+  #   url: http://loki.monitoring.svc:3100
+  #   batch_size: 100
+  #   batch_wait: 5s
+  #   tenant_id: ""
+  #   labels:
+  #     service: storage-sage
+  #     environment: production
+
+# =============================================================================
+# Daemon Configuration
+# =============================================================================
+daemon:
+  # Enable daemon mode (long-running with scheduler)
+  enabled: false
+
+  # HTTP server address for health checks and API
+  http_addr: ":8080"
+
+  # Metrics server address (Prometheus)
+  metrics_addr: ":9090"
+
+  # Cleanup schedule (Go duration or cron-style)
+  # Examples: "1h", "30m", "@every 6h", "@daily"
+  schedule: "1h"
+
+  # Timeout for manual trigger requests via /trigger endpoint
+  trigger_timeout: 30m
+
+  # PID file path (prevents multiple instances)
+  pid_file: /run/storage-sage/storage-sage.pid
+
+# =============================================================================
+# Metrics Configuration
+# =============================================================================
+metrics:
+  # Enable Prometheus metrics endpoint
+  enabled: true
+
+  # Metric name prefix
+  namespace: storage_sage
+
+# =============================================================================
+# Notifications Configuration
+# =============================================================================
+notifications:
+  webhooks:
+    # Example: Slack webhook
+    # - url: https://hooks.slack.com/services/XXX/YYY/ZZZ
+    #   events:
+    #     - cleanup_started
+    #     - cleanup_completed
+    #     - cleanup_failed
+    #   timeout: 10s
+    #   headers:
+    #     Content-Type: application/json
+
+# =============================================================================
+# Authentication Configuration
+# =============================================================================
+auth:
+  # Enable API authentication
+  enabled: false
+
+  # Paths that don't require authentication
+  public_paths:
+    - /health
+    - /ready
+    - /metrics
+
+  # API key authentication
+  api_keys:
+    enabled: false
+    # Single key (for simple setups)
+    # key: ss_0123456789abcdef0123456789abcdef
+    # Or load from environment variable
+    # key_env: STORAGE_SAGE_API_KEY
+    # Or load multiple keys from file
+    # keys_file: /etc/storage-sage/api-keys.txt
+    # Custom header name (default: X-API-Key)
+    # header_name: X-API-Key

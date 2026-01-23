@@ -25,6 +25,7 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/policy"
 	"github.com/ChrisB0-2/storage-sage/internal/safety"
 	"github.com/ChrisB0-2/storage-sage/internal/scanner"
+	"github.com/ChrisB0-2/storage-sage/internal/trash"
 )
 
 // version is set via ldflags at build time.
@@ -53,6 +54,10 @@ var (
 	daemonMode = flag.Bool("daemon", false, "run as long-running daemon")
 	schedule   = flag.String("schedule", "", "run schedule (e.g., '1h', '30m', '@every 6h')")
 	daemonAddr = flag.String("daemon-addr", ":8080", "daemon health endpoint address")
+	pidFile    = flag.String("pid-file", "", "PID file path for single-instance enforcement")
+
+	// Soft-delete flags
+	trashPath = flag.String("trash-path", "", "move files to trash instead of permanent delete")
 
 	// Loki flags
 	enableLoki = flag.Bool("loki", false, "enable Loki log shipping")
@@ -576,6 +581,7 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		Schedule:       sched,
 		HTTPAddr:       addr,
 		TriggerTimeout: cfg.Daemon.TriggerTimeout,
+		PIDFile:        cfg.Daemon.PIDFile,
 		AppConfig:      cfg,
 		Auditor:        sqlAud,
 		AuthMiddleware: authMW,
@@ -734,6 +740,16 @@ func mergeFlags(cfg *config.Config) {
 		}
 		cfg.Auth.APIKeys.Enabled = true
 		cfg.Auth.APIKeys.Key = *authKey
+	}
+
+	// Merge PID file flag
+	if flagSet["pid-file"] && *pidFile != "" {
+		cfg.Daemon.PIDFile = *pidFile
+	}
+
+	// Merge trash path flag
+	if flagSet["trash-path"] && *trashPath != "" {
+		cfg.Execution.TrashPath = *trashPath
 	}
 }
 
@@ -940,6 +956,19 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 	// Execute pass (only in execute mode)
 	if runMode == core.ModeExecute {
 		del := executor.NewSimpleWithMetrics(safe, safetyCfg, log, m)
+
+		// Configure soft-delete if trash path is set
+		if cfg.Execution.TrashPath != "" {
+			trashMgr, err := trash.New(trash.Config{
+				TrashPath: cfg.Execution.TrashPath,
+				MaxAge:    cfg.Execution.TrashMaxAge,
+			}, log)
+			if err != nil {
+				return fmt.Errorf("failed to initialize trash manager: %w", err)
+			}
+			del.WithTrash(trashMgr)
+			log.Info("soft-delete enabled", logger.F("trash_path", cfg.Execution.TrashPath))
+		}
 
 		var (
 			actionsAttempted int

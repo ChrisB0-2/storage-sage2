@@ -11,6 +11,7 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/core"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 	"github.com/ChrisB0-2/storage-sage/internal/metrics"
+	"github.com/ChrisB0-2/storage-sage/internal/trash"
 )
 
 // Action result reason constants.
@@ -18,6 +19,7 @@ const (
 	reasonWouldDelete  = "would_delete"
 	reasonAlreadyGone  = "already_gone"
 	reasonDeleted      = "deleted"
+	reasonTrashed      = "trashed"
 	reasonDeleteFailed = "delete_failed"
 )
 
@@ -31,6 +33,7 @@ type Simple struct {
 	now     func() time.Time
 	log     logger.Logger
 	metrics core.Metrics
+	trash   *trash.Manager
 }
 
 // NewSimple creates an executor with no-op logging and metrics.
@@ -81,6 +84,12 @@ func (e *Simple) WithAuditor(aud core.Auditor) *Simple {
 	return e
 }
 
+// WithTrash attaches a trash manager for soft-delete. Safe to pass nil.
+func (e *Simple) WithTrash(t *trash.Manager) *Simple {
+	e.trash = t
+	return e
+}
+
 // Execute performs the action for one PlanItem.
 //
 // Hard gates in order:
@@ -88,7 +97,9 @@ func (e *Simple) WithAuditor(aud core.Auditor) *Simple {
 //  2. scan-time safety allow (item.Safety.Allowed)
 //  3. execute-time safety re-check (safe.Validate) to prevent TOCTOU
 //  4. dry-run: report would-delete
-//  5. execute: delete (file/dir), fail-closed
+//  5. execute: delete (file/dir) or trash, fail-closed
+//
+//nolint:gocyclo // Sequential gate checks with trash support; complexity reflects safety requirements
 func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode) (res core.ActionResult) {
 	start := e.now()
 
@@ -157,8 +168,34 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 	}
 
 	// Gate 5: Perform deletion (fail-closed)
+	// If trash is enabled, move to trash instead of permanent delete
 	switch item.Candidate.Type {
 	case core.TargetFile:
+		// Try soft-delete first if trash is configured
+		if e.trash != nil {
+			trashPath, err := e.trash.MoveToTrash(item.Candidate.Path)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					res.Reason = reasonAlreadyGone
+					return res
+				}
+				e.log.Warn("trash failed", logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
+				e.metrics.IncDeleteErrors(reasonDeleteFailed)
+				res.Reason = reasonDeleteFailed
+				res.Err = err
+				return res
+			}
+
+			e.log.Info("trashed", logger.F("path", item.Candidate.Path), logger.F("trash_path", trashPath), logger.F("bytes_freed", item.Candidate.SizeBytes))
+			e.metrics.IncFilesDeleted(item.Candidate.Root)
+			e.metrics.AddBytesFreed(item.Candidate.SizeBytes)
+			res.Deleted = true
+			res.BytesFreed = item.Candidate.SizeBytes
+			res.Reason = reasonTrashed
+			return res
+		}
+
+		// Permanent delete
 		if err := os.Remove(item.Candidate.Path); err != nil {
 			// Idempotent behavior: already removed is not fatal.
 			if errors.Is(err, os.ErrNotExist) {
@@ -200,6 +237,31 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 			return nil
 		})
 
+		// Try soft-delete first if trash is configured
+		if e.trash != nil {
+			trashPath, err := e.trash.MoveToTrash(item.Candidate.Path)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					res.Reason = reasonAlreadyGone
+					return res
+				}
+				e.log.Warn("trash failed", logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
+				e.metrics.IncDeleteErrors(reasonDeleteFailed)
+				res.Reason = reasonDeleteFailed
+				res.Err = err
+				return res
+			}
+
+			e.log.Info("trashed", logger.F("path", item.Candidate.Path), logger.F("trash_path", trashPath), logger.F("bytes_freed", dirSize), logger.F("type", "dir"))
+			e.metrics.IncDirsDeleted(item.Candidate.Root)
+			e.metrics.AddBytesFreed(dirSize)
+			res.Deleted = true
+			res.BytesFreed = dirSize
+			res.Reason = reasonTrashed
+			return res
+		}
+
+		// Permanent delete
 		if err := os.RemoveAll(item.Candidate.Path); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				res.Reason = reasonAlreadyGone
