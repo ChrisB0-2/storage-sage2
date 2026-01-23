@@ -84,6 +84,9 @@ func main() {
 		case "validate":
 			runValidateCmd(os.Args[2:])
 			return
+		case "trash":
+			runTrashCmd(os.Args[2:])
+			return
 		}
 	}
 
@@ -371,6 +374,435 @@ func runValidateCmd(args []string) {
 	}
 	if cfg.Auth != nil && cfg.Auth.Enabled {
 		fmt.Printf("  Auth:          enabled\n")
+	}
+}
+
+// runTrashCmd handles the "trash" subcommand for managing soft-deleted files.
+func runTrashCmd(args []string) {
+	if len(args) == 0 {
+		printTrashUsage()
+		os.Exit(2)
+	}
+
+	switch args[0] {
+	case "list":
+		runTrashList(args[1:])
+	case "restore":
+		runTrashRestore(args[1:])
+	case "empty":
+		runTrashEmpty(args[1:])
+	case "help", "-h", "--help":
+		printTrashUsage()
+	default:
+		fmt.Fprintf(os.Stderr, "error: unknown trash subcommand: %s\n", args[0])
+		printTrashUsage()
+		os.Exit(2)
+	}
+}
+
+func printTrashUsage() {
+	fmt.Fprintf(os.Stderr, `Usage: storage-sage trash <command> [options]
+
+Manage soft-deleted files in the trash directory.
+
+Commands:
+  list      List all items in trash
+  restore   Restore an item from trash to its original location
+  empty     Permanently delete items from trash
+
+Examples:
+  storage-sage trash list -path /var/lib/storage-sage/trash
+  storage-sage trash restore -path /var/lib/storage-sage/trash -item <trash-name>
+  storage-sage trash empty -path /var/lib/storage-sage/trash -older-than 7d
+
+Run 'storage-sage trash <command> -h' for more information on a command.
+`)
+}
+
+// runTrashList lists all items currently in trash.
+func runTrashList(args []string) {
+	fs := flag.NewFlagSet("trash list", flag.ExitOnError)
+	trashDir := fs.String("path", "", "trash directory path (required, or set in config)")
+	configFile := fs.String("config", "", "path to config file (to read trash path)")
+	jsonOut := fs.Bool("json", false, "output as JSON")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: storage-sage trash list [options]\n\nList all items in the trash directory.\n\nOptions:\n")
+		fs.PrintDefaults()
+	}
+
+	_ = fs.Parse(args)
+
+	path := resolveTrashPath(*trashDir, *configFile)
+	if path == "" {
+		fmt.Fprintf(os.Stderr, "error: trash path required (use -path or configure execution.trash_path)\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	mgr, err := trash.New(trash.Config{TrashPath: path}, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to open trash: %v\n", err)
+		os.Exit(1)
+	}
+
+	items, err := mgr.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to list trash: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(items); err != nil {
+			fmt.Fprintf(os.Stderr, "error: failed to encode JSON: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if len(items) == 0 {
+		fmt.Println("Trash is empty.")
+		return
+	}
+
+	fmt.Printf("Trash directory: %s\n", path)
+	fmt.Printf("Items: %d\n\n", len(items))
+
+	// Calculate total size
+	var totalSize int64
+	for _, item := range items {
+		totalSize += item.Size
+	}
+	fmt.Printf("Total size: %s\n\n", formatBytesHuman(totalSize))
+
+	// Print header
+	fmt.Printf("%-40s  %-10s  %-20s  %s\n", "NAME", "SIZE", "TRASHED AT", "ORIGINAL PATH")
+	fmt.Printf("%s\n", strings.Repeat("-", 100))
+
+	for _, item := range items {
+		name := item.Name
+		if len(name) > 40 {
+			name = name[:37] + "..."
+		}
+
+		typeIndicator := ""
+		if item.IsDir {
+			typeIndicator = "/"
+		}
+
+		fmt.Printf("%-40s  %-10s  %-20s  %s%s\n",
+			name+typeIndicator,
+			formatBytesHuman(item.Size),
+			item.TrashedAt.Format("2006-01-02 15:04:05"),
+			item.OriginalPath,
+			"",
+		)
+	}
+}
+
+// runTrashRestore restores an item from trash.
+func runTrashRestore(args []string) {
+	fs := flag.NewFlagSet("trash restore", flag.ExitOnError)
+	trashDir := fs.String("path", "", "trash directory path (required, or set in config)")
+	configFile := fs.String("config", "", "path to config file (to read trash path)")
+	itemName := fs.String("item", "", "name of the item in trash to restore (required)")
+	force := fs.Bool("force", false, "overwrite if destination exists")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: storage-sage trash restore [options]\n\nRestore an item from trash to its original location.\n\nOptions:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage trash restore -path /var/lib/storage-sage/trash -item 20240115-103000_abc12345_file.txt\n")
+	}
+
+	_ = fs.Parse(args)
+
+	path := resolveTrashPath(*trashDir, *configFile)
+	if path == "" {
+		fmt.Fprintf(os.Stderr, "error: trash path required (use -path or configure execution.trash_path)\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	if *itemName == "" {
+		fmt.Fprintf(os.Stderr, "error: -item is required\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	mgr, err := trash.New(trash.Config{TrashPath: path}, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to open trash: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Find the item
+	items, err := mgr.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to list trash: %v\n", err)
+		os.Exit(1)
+	}
+
+	var targetItem *trash.TrashItem
+	for i := range items {
+		if items[i].Name == *itemName {
+			targetItem = &items[i]
+			break
+		}
+	}
+
+	if targetItem == nil {
+		fmt.Fprintf(os.Stderr, "error: item not found in trash: %s\n", *itemName)
+		fmt.Fprintf(os.Stderr, "\nUse 'storage-sage trash list -path %s' to see available items.\n", path)
+		os.Exit(1)
+	}
+
+	// Check if destination exists
+	if !*force {
+		if _, err := os.Stat(targetItem.OriginalPath); err == nil {
+			fmt.Fprintf(os.Stderr, "error: destination already exists: %s\n", targetItem.OriginalPath)
+			fmt.Fprintf(os.Stderr, "Use -force to overwrite.\n")
+			os.Exit(1)
+		}
+	} else {
+		// Remove existing destination if force is set
+		if _, err := os.Stat(targetItem.OriginalPath); err == nil {
+			if err := os.RemoveAll(targetItem.OriginalPath); err != nil {
+				fmt.Fprintf(os.Stderr, "error: failed to remove existing destination: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	}
+
+	originalPath, err := mgr.Restore(targetItem.TrashPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: restore failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Restored: %s -> %s\n", *itemName, originalPath)
+}
+
+// trashEmptyOptions holds parsed options for trash empty command.
+type trashEmptyOptions struct {
+	path      string
+	maxAge    time.Duration
+	all       bool
+	dryRun    bool
+	force     bool
+	olderThan string
+}
+
+// runTrashEmpty permanently deletes items from trash.
+func runTrashEmpty(args []string) {
+	opts := parseTrashEmptyFlags(args)
+
+	mgr, err := trash.New(trash.Config{
+		TrashPath: opts.path,
+		MaxAge:    opts.maxAge,
+	}, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to open trash: %v\n", err)
+		os.Exit(1)
+	}
+
+	items, err := mgr.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: failed to list trash: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(items) == 0 {
+		fmt.Println("Trash is already empty.")
+		return
+	}
+
+	toDelete, totalBytes := filterTrashItems(items, opts)
+	if len(toDelete) == 0 {
+		fmt.Printf("No items older than %s found in trash.\n", opts.olderThan)
+		return
+	}
+
+	fmt.Printf("Items to delete: %d\n", len(toDelete))
+	fmt.Printf("Space to free: %s\n\n", formatBytesHuman(totalBytes))
+
+	if opts.dryRun {
+		printTrashDryRun(toDelete)
+		return
+	}
+
+	if !opts.force && !confirmTrashEmpty(len(toDelete), totalBytes) {
+		fmt.Println("Aborted.")
+		return
+	}
+
+	executeTrashEmpty(mgr, toDelete, opts.all)
+}
+
+// parseTrashEmptyFlags parses and validates flags for trash empty command.
+func parseTrashEmptyFlags(args []string) trashEmptyOptions {
+	fs := flag.NewFlagSet("trash empty", flag.ExitOnError)
+	trashDir := fs.String("path", "", "trash directory path (required, or set in config)")
+	configFile := fs.String("config", "", "path to config file (to read trash path)")
+	olderThan := fs.String("older-than", "", "only delete items older than this (e.g., '7d', '24h')")
+	all := fs.Bool("all", false, "delete ALL items (ignores -older-than)")
+	dryRun := fs.Bool("dry-run", false, "show what would be deleted without actually deleting")
+	force := fs.Bool("force", false, "skip confirmation prompt")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: storage-sage trash empty [options]\n\nPermanently delete items from trash.\n\nOptions:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage trash empty -path /var/lib/storage-sage/trash -older-than 7d\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage trash empty -path /var/lib/storage-sage/trash -all -force\n")
+		fmt.Fprintf(os.Stderr, "  storage-sage trash empty -path /var/lib/storage-sage/trash -all -dry-run\n")
+	}
+
+	_ = fs.Parse(args)
+
+	path := resolveTrashPath(*trashDir, *configFile)
+	if path == "" {
+		fmt.Fprintf(os.Stderr, "error: trash path required (use -path or configure execution.trash_path)\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	if !*all && *olderThan == "" {
+		fmt.Fprintf(os.Stderr, "error: must specify -older-than or -all\n")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	var maxAge time.Duration
+	if *olderThan != "" {
+		maxAge = parseAgeDuration(*olderThan)
+		if maxAge == 0 {
+			fmt.Fprintf(os.Stderr, "error: invalid -older-than format: %s (use e.g., '7d', '24h', '30m')\n", *olderThan)
+			os.Exit(2)
+		}
+	}
+
+	return trashEmptyOptions{
+		path:      path,
+		maxAge:    maxAge,
+		all:       *all,
+		dryRun:    *dryRun,
+		force:     *force,
+		olderThan: *olderThan,
+	}
+}
+
+// filterTrashItems filters items based on age or all flag.
+func filterTrashItems(items []trash.TrashItem, opts trashEmptyOptions) ([]trash.TrashItem, int64) {
+	cutoff := time.Now().Add(-opts.maxAge)
+	var toDelete []trash.TrashItem
+	var totalBytes int64
+
+	for _, item := range items {
+		if opts.all || item.TrashedAt.Before(cutoff) {
+			toDelete = append(toDelete, item)
+			totalBytes += item.Size
+		}
+	}
+	return toDelete, totalBytes
+}
+
+// printTrashDryRun prints what would be deleted in dry-run mode.
+func printTrashDryRun(items []trash.TrashItem) {
+	fmt.Println("Items that would be deleted:")
+	for _, item := range items {
+		age := time.Since(item.TrashedAt).Round(time.Hour)
+		fmt.Printf("  - %s (age: %s, size: %s)\n", item.Name, age, formatBytesHuman(item.Size))
+	}
+	fmt.Println("\n(dry-run mode, nothing was deleted)")
+}
+
+// confirmTrashEmpty prompts user for confirmation.
+func confirmTrashEmpty(count int, totalBytes int64) bool {
+	fmt.Printf("This will permanently delete %d items (%s). Continue? [y/N] ", count, formatBytesHuman(totalBytes))
+	var response string
+	_, _ = fmt.Scanln(&response)
+	return response == "y" || response == "Y" || response == "yes"
+}
+
+// executeTrashEmpty performs the actual deletion.
+func executeTrashEmpty(mgr *trash.Manager, toDelete []trash.TrashItem, deleteAll bool) {
+	if deleteAll {
+		// Delete everything manually since Cleanup() respects maxAge
+		var deletedCount int
+		var freedBytes int64
+
+		for _, item := range toDelete {
+			if err := os.RemoveAll(item.TrashPath); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to delete %s: %v\n", item.Name, err)
+				continue
+			}
+			_ = os.Remove(item.TrashPath + ".meta")
+			deletedCount++
+			freedBytes += item.Size
+		}
+
+		fmt.Printf("Deleted: %d items\n", deletedCount)
+		fmt.Printf("Freed: %s\n", formatBytesHuman(freedBytes))
+	} else {
+		count, bytesFreed, err := mgr.Cleanup(context.Background())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: cleanup failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Deleted: %d items\n", count)
+		fmt.Printf("Freed: %s\n", formatBytesHuman(bytesFreed))
+	}
+}
+
+// resolveTrashPath determines the trash path from flag or config.
+func resolveTrashPath(flagPath, configFile string) string {
+	if flagPath != "" {
+		return flagPath
+	}
+
+	// Try to load config
+	cfgPath := configFile
+	if cfgPath == "" {
+		cfgPath = config.FindConfigFile()
+	}
+
+	if cfgPath != "" {
+		cfg, err := config.Load(cfgPath)
+		if err == nil && cfg.Execution.TrashPath != "" {
+			return cfg.Execution.TrashPath
+		}
+	}
+
+	return ""
+}
+
+// parseAgeDuration parses age strings like "7d", "24h", "30m"
+func parseAgeDuration(s string) time.Duration {
+	if len(s) < 2 {
+		return 0
+	}
+
+	unit := s[len(s)-1]
+	numStr := s[:len(s)-1]
+
+	var n int
+	if _, err := fmt.Sscanf(numStr, "%d", &n); err != nil || n <= 0 {
+		return 0
+	}
+
+	switch unit {
+	case 'd':
+		return time.Duration(n) * 24 * time.Hour
+	case 'h':
+		return time.Duration(n) * time.Hour
+	case 'm':
+		return time.Duration(n) * time.Minute
+	default:
+		return 0
 	}
 }
 
