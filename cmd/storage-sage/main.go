@@ -1008,6 +1008,21 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		}
 	}
 
+	// Initialize trash manager for API endpoints
+	var trashMgr *trash.Manager
+	if cfg.Execution.TrashPath != "" {
+		var err error
+		trashMgr, err = trash.New(trash.Config{
+			TrashPath: cfg.Execution.TrashPath,
+			MaxAge:    cfg.Execution.TrashMaxAge,
+		}, log)
+		if err != nil {
+			log.Warn("failed to initialize trash manager for API", logger.F("error", err.Error()))
+		} else {
+			log.Info("trash API enabled", logger.F("path", cfg.Execution.TrashPath))
+		}
+	}
+
 	// Create and run daemon with config and auditor for API endpoints
 	d := daemon.New(log, runFunc, daemon.Config{
 		Schedule:       sched,
@@ -1016,6 +1031,7 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		PIDFile:        cfg.Daemon.PIDFile,
 		AppConfig:      cfg,
 		Auditor:        sqlAud,
+		Trash:          trashMgr,
 		AuthMiddleware: authMW,
 		RBACMiddleware: rbacMW,
 	})

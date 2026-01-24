@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import Config from './pages/Config';
 import Metrics from './pages/Metrics';
+import Trash from './pages/Trash';
 
 function App() {
   return (
@@ -11,6 +12,7 @@ function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="history" element={<History />} />
+        <Route path="trash" element={<Trash />} />
         <Route path="config" element={<Config />} />
         <Route path="metrics" element={<Metrics />} />
       </Route>

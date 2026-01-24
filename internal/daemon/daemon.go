@@ -21,6 +21,7 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/config"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 	"github.com/ChrisB0-2/storage-sage/internal/pidfile"
+	"github.com/ChrisB0-2/storage-sage/internal/trash"
 	"github.com/ChrisB0-2/storage-sage/internal/web"
 )
 
@@ -67,6 +68,7 @@ type Daemon struct {
 	// Optional references for API endpoints
 	cfg     *config.Config
 	auditor *auditor.SQLiteAuditor
+	trash   *trash.Manager
 
 	// Optional authentication middleware
 	authMiddleware *auth.Middleware
@@ -94,6 +96,7 @@ type Config struct {
 	// Optional: references for API endpoints
 	AppConfig *config.Config         // Application config to expose via /api/config
 	Auditor   *auditor.SQLiteAuditor // Auditor for /api/audit/* endpoints
+	Trash     *trash.Manager         // Trash manager for /api/trash/* endpoints
 
 	// Optional: authentication middleware
 	AuthMiddleware *auth.Middleware     // Authentication middleware
@@ -121,6 +124,7 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 		pidFilePath:    cfg.PIDFile,
 		cfg:            cfg.AppConfig,
 		auditor:        cfg.Auditor,
+		trash:          cfg.Trash,
 		authMiddleware: cfg.AuthMiddleware,
 		rbacMiddleware: cfg.RBACMiddleware,
 		stopCh:         make(chan struct{}),
@@ -420,6 +424,8 @@ func (d *Daemon) startHTTP() error {
 	mux.HandleFunc("/api/config", d.handleAPIConfig)
 	mux.HandleFunc("/api/audit/query", d.handleAuditQuery)
 	mux.HandleFunc("/api/audit/stats", d.handleAuditStats)
+	mux.HandleFunc("/api/trash", d.handleTrash)
+	mux.HandleFunc("/api/trash/restore", d.handleTrashRestore)
 
 	// Serve embedded frontend (SPA with fallback to index.html)
 	d.setupStaticFileServer(mux)
@@ -581,6 +587,213 @@ func (d *Daemon) handleAuditStats(w http.ResponseWriter, r *http.Request) {
 
 	// Return stats as JSON
 	d.writeJSONResponse(w, http.StatusOK, stats)
+}
+
+// TrashItemResponse is the JSON representation of a trash item.
+type TrashItemResponse struct {
+	Name         string `json:"name"`
+	OriginalPath string `json:"original_path"`
+	Size         int64  `json:"size"`
+	TrashedAt    string `json:"trashed_at"`
+	IsDir        bool   `json:"is_dir"`
+}
+
+// handleTrash handles GET (list) and DELETE (empty) for /api/trash.
+func (d *Daemon) handleTrash(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if d.trash == nil {
+		d.writeJSONError(w, http.StatusNotFound, "trash not configured")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		d.handleTrashList(w)
+	case http.MethodDelete:
+		d.handleTrashEmpty(w, r)
+	default:
+		w.Header().Set("Allow", "GET, DELETE")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleTrashList returns all items in trash.
+func (d *Daemon) handleTrashList(w http.ResponseWriter) {
+	items, err := d.trash.List()
+	if err != nil {
+		d.writeJSONError(w, http.StatusInternalServerError, "failed to list trash: "+err.Error())
+		return
+	}
+
+	// Convert to JSON response format
+	response := make([]TrashItemResponse, 0, len(items))
+	for _, item := range items {
+		response = append(response, TrashItemResponse{
+			Name:         item.Name,
+			OriginalPath: item.OriginalPath,
+			Size:         item.Size,
+			TrashedAt:    item.TrashedAt.Format(time.RFC3339),
+			IsDir:        item.IsDir,
+		})
+	}
+
+	d.writeJSONResponse(w, http.StatusOK, response)
+}
+
+// handleTrashEmpty permanently deletes items from trash.
+// Query params: older_than (duration string like "7d", "24h"), all (boolean)
+func (d *Daemon) handleTrashEmpty(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	// Check for "all" parameter
+	if q.Get("all") == "true" {
+		items, err := d.trash.List()
+		if err != nil {
+			d.writeJSONError(w, http.StatusInternalServerError, "failed to list trash: "+err.Error())
+			return
+		}
+
+		var deleted int
+		var bytesFreed int64
+		for _, item := range items {
+			if err := os.RemoveAll(item.TrashPath); err != nil {
+				d.log.Warn("failed to delete trash item", logger.F("path", item.TrashPath), logger.F("error", err.Error()))
+				continue
+			}
+			_ = os.Remove(item.TrashPath + ".meta")
+			deleted++
+			bytesFreed += item.Size
+		}
+
+		d.writeJSONResponse(w, http.StatusOK, map[string]any{
+			"deleted":     deleted,
+			"bytes_freed": bytesFreed,
+		})
+		return
+	}
+
+	// Check for "older_than" parameter
+	olderThan := q.Get("older_than")
+	if olderThan == "" {
+		d.writeJSONError(w, http.StatusBadRequest, "must specify 'older_than' duration (e.g., '7d', '24h') or 'all=true'")
+		return
+	}
+
+	// Parse duration
+	duration, err := parseDurationWithDays(olderThan)
+	if err != nil {
+		d.writeJSONError(w, http.StatusBadRequest, "invalid duration: "+err.Error())
+		return
+	}
+
+	items, err := d.trash.List()
+	if err != nil {
+		d.writeJSONError(w, http.StatusInternalServerError, "failed to list trash: "+err.Error())
+		return
+	}
+
+	cutoff := time.Now().Add(-duration)
+	var deleted int
+	var bytesFreed int64
+
+	for _, item := range items {
+		if item.TrashedAt.Before(cutoff) {
+			if err := os.RemoveAll(item.TrashPath); err != nil {
+				d.log.Warn("failed to delete trash item", logger.F("path", item.TrashPath), logger.F("error", err.Error()))
+				continue
+			}
+			_ = os.Remove(item.TrashPath + ".meta")
+			deleted++
+			bytesFreed += item.Size
+		}
+	}
+
+	d.writeJSONResponse(w, http.StatusOK, map[string]any{
+		"deleted":     deleted,
+		"bytes_freed": bytesFreed,
+	})
+}
+
+// TrashRestoreRequest is the JSON request body for restore.
+type TrashRestoreRequest struct {
+	Name string `json:"name"`
+}
+
+// handleTrashRestore restores an item from trash.
+func (d *Daemon) handleTrashRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if d.trash == nil {
+		d.writeJSONError(w, http.StatusNotFound, "trash not configured")
+		return
+	}
+
+	// Parse request body
+	var req TrashRestoreRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		d.writeJSONError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Name == "" {
+		d.writeJSONError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// Find the item in trash
+	items, err := d.trash.List()
+	if err != nil {
+		d.writeJSONError(w, http.StatusInternalServerError, "failed to list trash: "+err.Error())
+		return
+	}
+
+	var targetItem *trash.TrashItem
+	for i := range items {
+		if items[i].Name == req.Name {
+			targetItem = &items[i]
+			break
+		}
+	}
+
+	if targetItem == nil {
+		d.writeJSONError(w, http.StatusNotFound, "item not found in trash: "+req.Name)
+		return
+	}
+
+	// Restore the item
+	originalPath, err := d.trash.Restore(targetItem.TrashPath)
+	if err != nil {
+		d.writeJSONError(w, http.StatusInternalServerError, "failed to restore: "+err.Error())
+		return
+	}
+
+	d.writeJSONResponse(w, http.StatusOK, map[string]any{
+		"restored":      true,
+		"original_path": originalPath,
+	})
+}
+
+// parseDurationWithDays parses a duration string that may include days (e.g., "7d", "24h").
+func parseDurationWithDays(s string) (time.Duration, error) {
+	// Handle day suffix
+	if len(s) > 1 && s[len(s)-1] == 'd' {
+		numStr := s[:len(s)-1]
+		var n int
+		if _, err := fmt.Sscanf(numStr, "%d", &n); err == nil && n > 0 {
+			return time.Duration(n) * 24 * time.Hour, nil
+		}
+		return 0, fmt.Errorf("invalid day duration: %s", s)
+	}
+
+	// Fall back to standard duration parsing
+	return time.ParseDuration(s)
 }
 
 // setupStaticFileServer configures the mux to serve embedded frontend files.

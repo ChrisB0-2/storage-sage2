@@ -6,6 +6,9 @@ import type {
   AuditQueryParams,
   Config,
   ApiError,
+  TrashItem,
+  TrashRestoreResponse,
+  TrashEmptyResponse,
 } from './types';
 
 class ApiClient {
@@ -75,6 +78,32 @@ class ApiClient {
   // Health check - GET /health
   async healthCheck(): Promise<{ status: string; state: string }> {
     return this.fetch('/health');
+  }
+
+  // Trash list endpoint - GET /api/trash
+  async listTrash(): Promise<TrashItem[]> {
+    return this.fetch<TrashItem[]>('/api/trash');
+  }
+
+  // Trash restore endpoint - POST /api/trash/restore
+  async restoreTrash(name: string): Promise<TrashRestoreResponse> {
+    return this.fetch<TrashRestoreResponse>('/api/trash/restore', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  // Trash empty endpoint - DELETE /api/trash
+  async emptyTrash(olderThan?: string): Promise<TrashEmptyResponse> {
+    const params = new URLSearchParams();
+    if (olderThan) {
+      params.set('older_than', olderThan);
+    } else {
+      params.set('all', 'true');
+    }
+    return this.fetch<TrashEmptyResponse>(`/api/trash?${params.toString()}`, {
+      method: 'DELETE',
+    });
   }
 }
 

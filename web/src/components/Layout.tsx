@@ -5,6 +5,7 @@ import type { DaemonState } from '../api/types';
 const navItems = [
   { to: '/', label: 'Dashboard', exact: true },
   { to: '/history', label: 'History' },
+  { to: '/trash', label: 'Trash' },
   { to: '/config', label: 'Config' },
   { to: '/metrics', label: 'Metrics' },
 ];

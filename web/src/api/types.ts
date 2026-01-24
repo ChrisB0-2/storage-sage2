@@ -140,3 +140,29 @@ export interface WebhookConfig {
 export interface ApiError {
   error: string;
 }
+
+// Trash item from /api/trash
+export interface TrashItem {
+  name: string;
+  original_path: string;
+  size: number;
+  trashed_at: string;
+  is_dir: boolean;
+}
+
+// Trash restore request
+export interface TrashRestoreRequest {
+  name: string;
+}
+
+// Trash restore response
+export interface TrashRestoreResponse {
+  restored: boolean;
+  original_path: string;
+}
+
+// Trash empty response
+export interface TrashEmptyResponse {
+  deleted: number;
+  bytes_freed: number;
+}
