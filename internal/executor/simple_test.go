@@ -1379,6 +1379,7 @@ func TestConcurrentDeletions_WithContextCancellation(t *testing.T) {
 	exec := NewSimple(safe, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled on all paths
 
 	var wg sync.WaitGroup
 	var cancelledCount atomic.Int32
