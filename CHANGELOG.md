@@ -22,7 +22,7 @@ All notable changes to Storage-Sage will be documented in this file.
 
 - Replaced several `time.Sleep`-based test synchronizations with deterministic channel/polling-based patterns to reduce test flakiness.
 
-- Added `waitForState` and `waitForCondition` test helpers for more reliable test synchronization.
+- Added `waitForState` test helper for more reliable test synchronization.
 
 ### Added
 

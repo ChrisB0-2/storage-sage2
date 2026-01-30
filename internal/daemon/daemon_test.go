@@ -34,19 +34,6 @@ func waitForState(t *testing.T, d *Daemon, expected State, timeout time.Duration
 	t.Fatalf("timed out waiting for state %s, got %s", expected, d.State())
 }
 
-// waitForCondition polls until the condition function returns true or timeout.
-func waitForCondition(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal(msg)
-}
-
 func TestStateString(t *testing.T) {
 	tests := []struct {
 		state State
