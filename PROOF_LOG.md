@@ -2,7 +2,7 @@
 
 ## Release: v1.0.0
 ## Date: 2026-01-30
-## Commit: 3cb14ad (feat(daemon): add run tracking with bounded shutdown)
+## Release Commit: dc0dbda (includes lint fix on top of 3cb14ad)
 
 ---
 
@@ -63,10 +63,25 @@ go test -race -coverprofile=coverage.out ./...
 
 ### 4. CI Status
 
-Verified via: `gh run list --limit 1`
+**CI Run:** 21528401190
+**Status:** SUCCESS
+**URL:** https://github.com/ChrisB0-2/storage-sage/actions/runs/21528401190
+
+```bash
+$ gh run view 21528401190 --json conclusion -q '.conclusion'
+success
+```
+
+All jobs passed:
+- Vet
+- Lint (golangci-lint)
+- Security Scan (gosec)
+- Test (race detector + coverage)
+- Build (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64)
+- Docker Security Scan
 
 ---
 
 ## Sign-Off
 
-Local verification completed successfully. Ready for CI validation and release tagging.
+Local verification and CI validation completed successfully. Release v1.0.0 tagged.
