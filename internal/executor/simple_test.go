@@ -1361,7 +1361,7 @@ func TestConcurrentDeletions_MetricsConsistency(t *testing.T) {
 }
 
 // TestConcurrentDeletions_WithContextCancellation tests behavior when
-// context is cancelled during concurrent deletions.
+// context is canceled during concurrent deletions.
 func TestConcurrentDeletions_WithContextCancellation(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1379,10 +1379,10 @@ func TestConcurrentDeletions_WithContextCancellation(t *testing.T) {
 	exec := NewSimple(safe, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // Ensure context is cancelled on all paths
+	defer cancel() // Ensure context is canceled on all paths
 
 	var wg sync.WaitGroup
-	var cancelledCount atomic.Int32
+	var canceledCount atomic.Int32
 
 	for i := 0; i < numFiles; i++ {
 		wg.Add(1)
@@ -1404,14 +1404,14 @@ func TestConcurrentDeletions_WithContextCancellation(t *testing.T) {
 			}
 			result := exec.Execute(ctx, item, core.ModeExecute)
 			if result.Reason == "ctx_canceled" {
-				cancelledCount.Add(1)
+				canceledCount.Add(1)
 			}
 		}(i)
 	}
 
 	wg.Wait()
 
-	// Some deletions should have been cancelled
+	// Some deletions should have been canceled
 	// (exact number depends on timing, so we just verify it handles gracefully)
-	t.Logf("Cancelled: %d out of %d", cancelledCount.Load(), numFiles)
+	t.Logf("Canceled: %d out of %d", canceledCount.Load(), numFiles)
 }

@@ -37,20 +37,30 @@ const (
 	StateStopped
 )
 
+// State string constants.
+const (
+	stateStrStarting = "starting"
+	stateStrReady    = "ready"
+	stateStrRunning  = "running"
+	stateStrStopping = "stopping"
+	stateStrStopped  = "stopped"
+	stateStrUnknown  = "unknown"
+)
+
 func (s State) String() string {
 	switch s {
 	case StateStarting:
-		return "starting"
+		return stateStrStarting
 	case StateReady:
-		return "ready"
+		return stateStrReady
 	case StateRunning:
-		return "running"
+		return stateStrRunning
 	case StateStopping:
-		return "stopping"
+		return stateStrStopping
 	case StateStopped:
-		return "stopped"
+		return stateStrStopped
 	default:
-		return "unknown"
+		return stateStrUnknown
 	}
 }
 
@@ -75,17 +85,17 @@ type Daemon struct {
 	authMiddleware *auth.Middleware
 	rbacMiddleware *auth.RBACMiddleware
 
-	state        atomic.Int32
-	running      atomic.Bool
-	lastRun      time.Time
-	lastErr      error
-	runCount     int64
-	mu           sync.RWMutex
-	stopCh       chan struct{}
-	stopOnce     sync.Once
-	auditorOnce  sync.Once // ensures auditor Close() is called exactly once
-	httpServer   *http.Server
-	pidFile      *pidfile.PIDFile
+	state       atomic.Int32
+	running     atomic.Bool
+	lastRun     time.Time
+	lastErr     error
+	runCount    int64
+	mu          sync.RWMutex
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+	auditorOnce sync.Once // ensures auditor Close() is called exactly once
+	httpServer  *http.Server
+	pidFile     *pidfile.PIDFile
 }
 
 // Config holds daemon configuration.

@@ -21,6 +21,7 @@ const (
 	reasonDeleted      = "deleted"
 	reasonTrashed      = "trashed"
 	reasonDeleteFailed = "delete_failed"
+	reasonCtxCanceled  = "ctx_canceled"
 )
 
 // Simple is a safe-by-default deleter.
@@ -125,7 +126,7 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 	// Cancellation check early.
 	select {
 	case <-ctx.Done():
-		res.Reason = "ctx_canceled"
+		res.Reason = reasonCtxCanceled
 		res.Err = ctx.Err()
 		return res
 	default:

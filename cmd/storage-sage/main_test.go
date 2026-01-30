@@ -504,10 +504,10 @@ func TestE2E_FullPipeline_ScanPlanExecute(t *testing.T) {
 	oldExcludedTmp := filepath.Join(root, "keep_old_excluded.tmp") // matches "keep_*" exclusion
 	importantTxt := filepath.Join(root, "important.txt")
 	protectedSecret := filepath.Join(protectedDir, "secret.tmp")
-	createFile(newFileTmp, "too new", 5)          // Only 5 days old
-	createFile(oldExcludedTmp, "excluded", 40)    // Old but excluded by pattern
-	createFile(importantTxt, "wrong ext", 40)     // Old but wrong extension
-	createFile(protectedSecret, "protected", 40)  // Old but under protected path
+	createFile(newFileTmp, "too new", 5)         // Only 5 days old
+	createFile(oldExcludedTmp, "excluded", 40)   // Old but excluded by pattern
+	createFile(importantTxt, "wrong ext", 40)    // Old but wrong extension
+	createFile(protectedSecret, "protected", 40) // Old but under protected path
 
 	// Set up audit database
 	auditDBPath := filepath.Join(t.TempDir(), "audit.db")
@@ -684,7 +684,10 @@ func TestE2E_DryRunPreservesAllFiles(t *testing.T) {
 		Recursive:    true,
 		IncludeFiles: true,
 	})
-	go func() { for range errCh { } }()
+	go func() {
+		for range errCh {
+		}
+	}()
 
 	// Plan
 	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
@@ -763,7 +766,10 @@ func TestE2E_ProtectedPaths(t *testing.T) {
 		Recursive:    true,
 		IncludeFiles: true,
 	})
-	go func() { for range errCh { } }()
+	go func() {
+		for range errCh {
+		}
+	}()
 
 	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
 	if err != nil {
@@ -830,7 +836,10 @@ func TestE2E_MultipleRoots(t *testing.T) {
 		Recursive:    true,
 		IncludeFiles: true,
 	})
-	go func() { for range errCh { } }()
+	go func() {
+		for range errCh {
+		}
+	}()
 
 	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
 	if err != nil {
@@ -923,7 +932,10 @@ func TestE2E_AuditRecordsMatchActions(t *testing.T) {
 		Recursive:    true,
 		IncludeFiles: true,
 	})
-	go func() { for range errCh { } }()
+	go func() {
+		for range errCh {
+		}
+	}()
 
 	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
 	if err != nil {

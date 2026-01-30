@@ -759,10 +759,8 @@ func TestScheduler_PanicRecovery_LogsStack(t *testing.T) {
 	<-done
 
 	// Verify daemon is still in a valid state (not crashed)
-	state := d.State()
-	if state != StateStopped {
-		// Expected to stop after timeout, state could be Stopped
-	}
+	// State should be Stopped after timeout
+	_ = d.State()
 }
 
 // ============================================================================
@@ -1007,7 +1005,7 @@ func TestGracefulShutdown_WaitsForRunToComplete(t *testing.T) {
 		case <-time.After(500 * time.Millisecond):
 			close(runComplete)
 		case <-ctx.Done():
-			// Context cancelled, but we still finish
+			// Context canceled, but we still finish
 			close(runComplete)
 		}
 		return nil
@@ -1207,10 +1205,10 @@ func TestParseTimeParam(t *testing.T) {
 		wantZero bool
 	}{
 		{"2024-01-15T10:30:00Z", false}, // RFC3339
-		{"2024-01-15", false},            // Date
-		{"24h", false},                   // Duration
-		{"7d", false},                    // Days
-		{"30m", false},                   // Minutes
+		{"2024-01-15", false},           // Date
+		{"24h", false},                  // Duration
+		{"7d", false},                   // Days
+		{"30m", false},                  // Minutes
 		{"invalid", true},
 		{"", true},
 	}
@@ -2605,7 +2603,7 @@ func TestDaemon_AuditorNotClosedPerRun(t *testing.T) {
 	runFunc := func(ctx context.Context) error {
 		runCount.Add(1)
 		// Verify auditor is still open during run using a fresh context
-		// (the run context may be cancelled, but auditor should still work)
+		// (the run context may be canceled, but auditor should still work)
 		_, err := realAud.Query(context.Background(), auditor.QueryFilter{Limit: 1})
 		if err != nil {
 			// Only flag as error if it's actually closed, not context cancellation
@@ -2654,4 +2652,3 @@ func TestDaemon_AuditorNotClosedPerRun(t *testing.T) {
 		t.Error("expected auditor to be closed after daemon stopped")
 	}
 }
-
