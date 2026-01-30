@@ -20,6 +20,33 @@ import (
 	"github.com/ChrisB0-2/storage-sage/internal/trash"
 )
 
+// waitForState polls the daemon state until it matches the expected state or timeout.
+// This is a test helper that avoids flaky time.Sleep synchronization.
+func waitForState(t *testing.T, d *Daemon, expected State, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if d.State() == expected {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for state %s, got %s", expected, d.State())
+}
+
+// waitForCondition polls until the condition function returns true or timeout.
+func waitForCondition(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(msg)
+}
+
 func TestStateString(t *testing.T) {
 	tests := []struct {
 		state State
@@ -225,9 +252,11 @@ func TestDaemon_TriggerRun_Error(t *testing.T) {
 }
 
 func TestDaemon_TriggerRun_AlreadyRunning(t *testing.T) {
+	runStarted := make(chan struct{})
 	blockCh := make(chan struct{})
 	runFunc := func(ctx context.Context) error {
-		<-blockCh // Block until released
+		close(runStarted) // Signal that run has started
+		<-blockCh         // Block until released
 		return nil
 	}
 
@@ -238,8 +267,12 @@ func TestDaemon_TriggerRun_AlreadyRunning(t *testing.T) {
 		_ = d.TriggerRun(context.Background())
 	}()
 
-	// Give it time to start
-	time.Sleep(50 * time.Millisecond)
+	// Wait for first run to actually start (deterministic)
+	select {
+	case <-runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first run did not start")
+	}
 
 	// Try to trigger another run while first is in progress
 	err := d.TriggerRun(context.Background())
@@ -1061,8 +1094,8 @@ func TestGracefulShutdown_HTTPServerShutdown(t *testing.T) {
 		done <- d.Run(ctx)
 	}()
 
-	// Wait for ready
-	time.Sleep(50 * time.Millisecond)
+	// Wait for ready state (poll instead of sleep)
+	waitForState(t, d, StateReady, time.Second)
 
 	// Stop
 	cancel()
@@ -2450,8 +2483,8 @@ func TestDaemon_AuditorClosedOnNormalShutdown(t *testing.T) {
 		done <- d.Run(ctx)
 	}()
 
-	// Wait for daemon to be ready
-	time.Sleep(100 * time.Millisecond)
+	// Wait for daemon to be ready (poll instead of sleep)
+	waitForState(t, d, StateReady, time.Second)
 
 	// Stop daemon normally
 	cancel()
@@ -2581,7 +2614,8 @@ func TestDaemon_NilAuditorHandledGracefully(t *testing.T) {
 		done <- d.Run(ctx)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Poll for ready state instead of sleeping
+	waitForState(t, d, StateReady, time.Second)
 	cancel()
 
 	err := <-done
@@ -2650,5 +2684,184 @@ func TestDaemon_AuditorNotClosedPerRun(t *testing.T) {
 	_, err = realAud.Query(context.Background(), auditor.QueryFilter{Limit: 1})
 	if err == nil {
 		t.Error("expected auditor to be closed after daemon stopped")
+	}
+}
+
+// TestDaemon_AuditorWaitsForInFlightTriggerRun proves that the auditor is not closed
+// until an in-flight TriggerRun completes. This is a critical safety property.
+func TestDaemon_AuditorWaitsForInFlightTriggerRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	realAud, err := auditor.NewSQLite(auditor.SQLiteConfig{Path: tmpDir + "/audit.db"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runStarted := make(chan struct{})
+	runCanProceed := make(chan struct{})
+	runCompleted := make(chan struct{})
+	var auditorOpenDuringRun atomic.Bool
+
+	runFunc := func(ctx context.Context) error {
+		close(runStarted)
+		// Check if auditor is still open (should be, since run is in-flight)
+		_, err := realAud.Query(context.Background(), auditor.QueryFilter{Limit: 1})
+		if err == nil {
+			auditorOpenDuringRun.Store(true)
+		}
+		<-runCanProceed // Block until test signals to proceed
+		close(runCompleted)
+		return nil
+	}
+
+	d := New(logger.NewNop(), runFunc, Config{
+		HTTPAddr:       ":0",
+		Auditor:        realAud,
+		RunWaitTimeout: 5 * time.Second, // Enough time for test
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	daemonDone := make(chan error, 1)
+	go func() {
+		daemonDone <- d.Run(ctx)
+	}()
+
+	// Wait for daemon to be ready
+	for i := 0; i < 50; i++ {
+		if d.State() == StateReady {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Start a TriggerRun in the background
+	triggerDone := make(chan error, 1)
+	go func() {
+		triggerDone <- d.TriggerRun(context.Background())
+	}()
+
+	// Wait for the run to start
+	select {
+	case <-runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("run did not start")
+	}
+
+	// Initiate shutdown while run is still in progress
+	cancel()
+
+	// Give shutdown a moment to begin (but run is still blocked)
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify auditor is still open (daemon waiting for run)
+	if _, err := realAud.Query(context.Background(), auditor.QueryFilter{Limit: 1}); err != nil {
+		t.Error("auditor closed before in-flight run completed - THIS IS A BUG")
+	}
+
+	// Allow run to complete
+	close(runCanProceed)
+
+	// Wait for run to finish
+	select {
+	case <-runCompleted:
+	case <-time.After(time.Second):
+		t.Fatal("run did not complete")
+	}
+
+	// Wait for daemon to exit
+	select {
+	case err := <-daemonDone:
+		if err != nil {
+			t.Errorf("daemon returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not shut down")
+	}
+
+	// Verify trigger completed successfully
+	select {
+	case err := <-triggerDone:
+		if err != nil {
+			t.Errorf("trigger returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("trigger did not complete")
+	}
+
+	// Verify auditor was open during run
+	if !auditorOpenDuringRun.Load() {
+		t.Error("auditor was not accessible during run")
+	}
+
+	// NOW auditor should be closed
+	_, err = realAud.Query(context.Background(), auditor.QueryFilter{Limit: 1})
+	if err == nil {
+		t.Error("expected auditor to be closed after daemon stopped")
+	}
+}
+
+// TestDaemon_RunWaitTimeout verifies that shutdown proceeds after timeout
+// even if runs are still in progress.
+func TestDaemon_RunWaitTimeout(t *testing.T) {
+	runStarted := make(chan struct{})
+	runBlocked := make(chan struct{}) // Never closed - simulates a stuck run
+
+	runFunc := func(ctx context.Context) error {
+		close(runStarted)
+		<-runBlocked // Block forever
+		return nil
+	}
+
+	d := New(logger.NewNop(), runFunc, Config{
+		HTTPAddr:       ":0",
+		RunWaitTimeout: 100 * time.Millisecond, // Short timeout for test
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	daemonDone := make(chan error, 1)
+	go func() {
+		daemonDone <- d.Run(ctx)
+	}()
+
+	// Wait for ready
+	for i := 0; i < 50; i++ {
+		if d.State() == StateReady {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Start a run that will block
+	go func() {
+		_ = d.TriggerRun(context.Background())
+	}()
+
+	// Wait for run to start
+	select {
+	case <-runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("run did not start")
+	}
+
+	// Initiate shutdown
+	shutdownStart := time.Now()
+	cancel()
+
+	// Daemon should exit after timeout (not hang forever)
+	select {
+	case err := <-daemonDone:
+		if err != nil {
+			t.Errorf("daemon returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not shut down (likely stuck waiting for run)")
+	}
+
+	shutdownDuration := time.Since(shutdownStart)
+	// Shutdown should take at least the timeout duration but not too long
+	if shutdownDuration < 100*time.Millisecond {
+		t.Errorf("shutdown too fast (%v), expected at least 100ms timeout", shutdownDuration)
+	}
+	if shutdownDuration > 2*time.Second {
+		t.Errorf("shutdown too slow (%v), expected around 100ms", shutdownDuration)
 	}
 }

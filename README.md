@@ -406,12 +406,17 @@ execution:
 
 The daemon handles `SIGINT` and `SIGTERM` signals for graceful shutdown:
 
-- Stops accepting new scheduled runs
-- Waits for any in-progress cleanup to complete
-- Shuts down HTTP server cleanly
-- Closes the auditor (flushes pending writes)
-- Releases PID file lock
-- Exits with code 0
+1. Stops accepting new scheduled runs
+2. Cancels scheduler context and waits for scheduler goroutine to exit
+3. Shuts down HTTP server cleanly (10s timeout)
+4. **Waits for all in-flight runs to complete** (both scheduled and API-triggered, with configurable timeout)
+5. Closes the auditor only after all runs complete (flushes pending writes)
+6. Releases PID file lock
+7. Exits with code 0
+
+**Run completion guarantee**: The daemon tracks all active runs (scheduled and triggered via `/trigger` API). During shutdown, it waits for these runs to complete before closing resources. This prevents "database closed" errors when a long-running cleanup is interrupted by shutdown.
+
+**Bounded shutdown time**: If in-flight runs don't complete within the configured timeout (default: 10s), shutdown proceeds anyway to prevent hangs. A warning is logged when this happens.
 
 #### Resource Lifecycle
 
@@ -419,7 +424,7 @@ The daemon takes ownership of resources passed via configuration:
 
 | Resource | Ownership | Cleanup |
 |----------|-----------|---------|
-| Auditor (`-audit-db`) | Daemon owns | Closed on shutdown (normal or panic-triggered) |
+| Auditor (`-audit-db`) | Daemon owns | Closed on shutdown after all runs complete |
 | PID File (`-pid-file`) | Daemon owns | Released on shutdown |
 | Trash Manager | Daemon owns | N/A (no explicit close needed) |
 

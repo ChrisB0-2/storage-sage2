@@ -75,6 +75,7 @@ type Daemon struct {
 	httpAddr       string
 	triggerTimeout time.Duration
 	pidFilePath    string
+	runWaitTimeout time.Duration // timeout for waiting on in-flight runs during shutdown
 
 	// Optional references for API endpoints
 	cfg     *config.Config
@@ -93,7 +94,8 @@ type Daemon struct {
 	mu          sync.RWMutex
 	stopCh      chan struct{}
 	stopOnce    sync.Once
-	auditorOnce sync.Once // ensures auditor Close() is called exactly once
+	auditorOnce sync.Once      // ensures auditor Close() is called exactly once
+	runsWG      sync.WaitGroup // tracks in-flight runs (scheduled + API-triggered)
 	httpServer  *http.Server
 	pidFile     *pidfile.PIDFile
 }
@@ -104,6 +106,7 @@ type Config struct {
 	HTTPAddr       string        // Address for health/ready endpoints (e.g., ":8080")
 	TriggerTimeout time.Duration // Timeout for manual trigger requests (default: 30m)
 	PIDFile        string        // Path to PID file for single-instance enforcement
+	RunWaitTimeout time.Duration // Timeout for waiting on in-flight runs during shutdown (default: 10s)
 
 	// Optional: references for API endpoints
 	AppConfig *config.Config         // Application config to expose via /api/config
@@ -126,6 +129,9 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 	if cfg.TriggerTimeout <= 0 {
 		cfg.TriggerTimeout = 30 * time.Minute
 	}
+	if cfg.RunWaitTimeout <= 0 {
+		cfg.RunWaitTimeout = 10 * time.Second
+	}
 
 	d := &Daemon{
 		log:            log,
@@ -133,6 +139,7 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 		schedule:       cfg.Schedule,
 		httpAddr:       cfg.HTTPAddr,
 		triggerTimeout: cfg.TriggerTimeout,
+		runWaitTimeout: cfg.RunWaitTimeout,
 		pidFilePath:    cfg.PIDFile,
 		cfg:            cfg.AppConfig,
 		auditor:        cfg.Auditor,
@@ -227,6 +234,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.log.Warn("HTTP server shutdown error", logger.F("error", err.Error()))
 	}
 
+	// Wait for any in-flight runs to complete (or timeout)
+	d.log.Debug("waiting for in-flight runs to complete")
+	if !d.waitForRuns(d.runWaitTimeout) {
+		d.log.Warn("timed out waiting for in-flight runs", logger.F("timeout", d.runWaitTimeout.String()))
+	}
+
 	// Close auditor (also called via defer, but explicit call makes shutdown order clear)
 	d.closeAuditor()
 
@@ -260,6 +273,23 @@ func (d *Daemon) closeAuditor() {
 	})
 }
 
+// waitForRuns waits for all in-flight runs to complete with a timeout.
+// Returns true if all runs completed, false if timed out.
+func (d *Daemon) waitForRuns(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		d.runsWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
 // TriggerRun manually triggers a run (for API use).
 // Returns error if a run is already in progress.
 // Includes panic recovery to prevent API handler crashes.
@@ -267,6 +297,10 @@ func (d *Daemon) TriggerRun(ctx context.Context) (err error) {
 	if !d.running.CompareAndSwap(false, true) {
 		return fmt.Errorf("run already in progress")
 	}
+
+	// Track this run for graceful shutdown (must defer Done before running.Store(false))
+	d.runsWG.Add(1)
+	defer d.runsWG.Done()
 	defer d.running.Store(false)
 
 	// Panic recovery for API-triggered runs
@@ -354,10 +388,15 @@ func (d *Daemon) runScheduler(ctx context.Context, done chan struct{}) {
 			return
 		case <-ticker.C:
 			if d.running.CompareAndSwap(false, true) {
-				d.state.Store(int32(StateRunning))
-				d.safeExecuteRun(ctx)
-				d.state.Store(int32(StateReady))
-				d.running.Store(false)
+				// Track this run for graceful shutdown
+				d.runsWG.Add(1)
+				func() {
+					defer d.runsWG.Done()
+					defer d.running.Store(false)
+					d.state.Store(int32(StateRunning))
+					d.safeExecuteRun(ctx)
+					d.state.Store(int32(StateReady))
+				}()
 			} else {
 				d.log.Warn("skipping scheduled run - previous run still in progress")
 			}
