@@ -409,7 +409,21 @@ The daemon handles `SIGINT` and `SIGTERM` signals for graceful shutdown:
 - Stops accepting new scheduled runs
 - Waits for any in-progress cleanup to complete
 - Shuts down HTTP server cleanly
+- Closes the auditor (flushes pending writes)
+- Releases PID file lock
 - Exits with code 0
+
+#### Resource Lifecycle
+
+The daemon takes ownership of resources passed via configuration:
+
+| Resource | Ownership | Cleanup |
+|----------|-----------|---------|
+| Auditor (`-audit-db`) | Daemon owns | Closed on shutdown (normal or panic-triggered) |
+| PID File (`-pid-file`) | Daemon owns | Released on shutdown |
+| Trash Manager | Daemon owns | N/A (no explicit close needed) |
+
+**Important**: When using the daemon programmatically, the daemon will close the auditor on shutdown. Do not close the auditor externally after starting the daemon.
 
 ### Running as a System Service
 

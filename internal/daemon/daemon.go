@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,16 +75,17 @@ type Daemon struct {
 	authMiddleware *auth.Middleware
 	rbacMiddleware *auth.RBACMiddleware
 
-	state      atomic.Int32
-	running    atomic.Bool
-	lastRun    time.Time
-	lastErr    error
-	runCount   int64
-	mu         sync.RWMutex
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	httpServer *http.Server
-	pidFile    *pidfile.PIDFile
+	state        atomic.Int32
+	running      atomic.Bool
+	lastRun      time.Time
+	lastErr      error
+	runCount     int64
+	mu           sync.RWMutex
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	auditorOnce  sync.Once // ensures auditor Close() is called exactly once
+	httpServer   *http.Server
+	pidFile      *pidfile.PIDFile
 }
 
 // Config holds daemon configuration.
@@ -136,8 +138,12 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 
 // Run starts the daemon and blocks until shutdown.
 // It handles SIGINT and SIGTERM for graceful shutdown.
+// The daemon takes ownership of the configured auditor and will close it on shutdown.
 func (d *Daemon) Run(ctx context.Context) error {
 	d.log.Info("daemon starting", logger.F("http_addr", d.httpAddr), logger.F("schedule", d.schedule))
+
+	// Ensure auditor is closed on any exit path (normal, panic, early return)
+	defer d.closeAuditor()
 
 	// Acquire PID file lock (prevents multiple instances)
 	if d.pidFilePath != "" {
@@ -211,6 +217,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.log.Warn("HTTP server shutdown error", logger.F("error", err.Error()))
 	}
 
+	// Close auditor (also called via defer, but explicit call makes shutdown order clear)
+	d.closeAuditor()
+
 	d.state.Store(int32(StateStopped))
 	d.log.Info("daemon stopped")
 
@@ -224,13 +233,51 @@ func (d *Daemon) Stop() {
 	})
 }
 
+// closeAuditor closes the auditor if configured, exactly once.
+// Safe to call multiple times; subsequent calls are no-ops.
+// Errors are logged but do not fail the shutdown.
+func (d *Daemon) closeAuditor() {
+	d.auditorOnce.Do(func() {
+		if d.auditor == nil {
+			return
+		}
+		d.log.Debug("closing auditor")
+		if err := d.auditor.Close(); err != nil {
+			d.log.Warn("failed to close auditor", logger.F("error", err.Error()))
+		} else {
+			d.log.Debug("auditor closed")
+		}
+	})
+}
+
 // TriggerRun manually triggers a run (for API use).
 // Returns error if a run is already in progress.
-func (d *Daemon) TriggerRun(ctx context.Context) error {
+// Includes panic recovery to prevent API handler crashes.
+func (d *Daemon) TriggerRun(ctx context.Context) (err error) {
 	if !d.running.CompareAndSwap(false, true) {
 		return fmt.Errorf("run already in progress")
 	}
 	defer d.running.Store(false)
+
+	// Panic recovery for API-triggered runs
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			d.log.Error("trigger run panic recovered",
+				logger.F("panic", fmt.Sprintf("%v", r)),
+				logger.F("stack", string(stack)))
+
+			// Record the panic as an error
+			d.mu.Lock()
+			d.lastErr = fmt.Errorf("trigger panic: %v", r)
+			d.runCount++
+			d.lastRun = time.Now()
+			d.mu.Unlock()
+
+			// Return error to caller instead of crashing
+			err = fmt.Errorf("run panicked: %v", r)
+		}
+	}()
 
 	return d.executeRun(ctx)
 }
@@ -253,8 +300,31 @@ func (d *Daemon) LastRun() (time.Time, int64, error) {
 }
 
 // runScheduler runs the cleanup on the configured schedule.
+// It includes panic recovery to prevent the daemon from crashing on unhandled panics.
 func (d *Daemon) runScheduler(ctx context.Context, done chan struct{}) {
 	defer close(done)
+
+	// Panic recovery: log stack trace and mark daemon as stopped.
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			d.log.Error("scheduler panic recovered",
+				logger.F("panic", fmt.Sprintf("%v", r)),
+				logger.F("stack", string(stack)))
+
+			// Record the panic as an error in lastErr for visibility
+			d.mu.Lock()
+			d.lastErr = fmt.Errorf("scheduler panic: %v", r)
+			d.mu.Unlock()
+
+			// Transition to stopped state - the daemon is no longer functional
+			d.state.Store(int32(StateStopped))
+			d.running.Store(false)
+
+			// Signal stop to allow graceful cleanup
+			d.Stop()
+		}
+	}()
 
 	interval, err := parseSchedule(d.schedule)
 	if err != nil {
@@ -275,16 +345,38 @@ func (d *Daemon) runScheduler(ctx context.Context, done chan struct{}) {
 		case <-ticker.C:
 			if d.running.CompareAndSwap(false, true) {
 				d.state.Store(int32(StateRunning))
-				err := d.executeRun(ctx)
-				if err != nil && ctx.Err() == nil {
-					d.log.Error("scheduled run failed", logger.F("error", err.Error()))
-				}
+				d.safeExecuteRun(ctx)
 				d.state.Store(int32(StateReady))
 				d.running.Store(false)
 			} else {
 				d.log.Warn("skipping scheduled run - previous run still in progress")
 			}
 		}
+	}
+}
+
+// safeExecuteRun wraps executeRun with panic recovery.
+// This ensures a panic in the run function doesn't crash the scheduler goroutine.
+func (d *Daemon) safeExecuteRun(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			d.log.Error("run panic recovered",
+				logger.F("panic", fmt.Sprintf("%v", r)),
+				logger.F("stack", string(stack)))
+
+			// Record the panic as an error
+			d.mu.Lock()
+			d.lastErr = fmt.Errorf("run panic: %v", r)
+			d.runCount++
+			d.lastRun = time.Now()
+			d.mu.Unlock()
+		}
+	}()
+
+	err := d.executeRun(ctx)
+	if err != nil && ctx.Err() == nil {
+		d.log.Error("scheduled run failed", logger.F("error", err.Error()))
 	}
 }
 

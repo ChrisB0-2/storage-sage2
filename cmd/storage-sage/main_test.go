@@ -12,6 +12,11 @@ import (
 
 	"github.com/ChrisB0-2/storage-sage/internal/auditor"
 	"github.com/ChrisB0-2/storage-sage/internal/core"
+	"github.com/ChrisB0-2/storage-sage/internal/executor"
+	"github.com/ChrisB0-2/storage-sage/internal/planner"
+	"github.com/ChrisB0-2/storage-sage/internal/policy"
+	"github.com/ChrisB0-2/storage-sage/internal/safety"
+	"github.com/ChrisB0-2/storage-sage/internal/scanner"
 )
 
 // TestVersionFlag tests the -version flag
@@ -450,4 +455,512 @@ func getCmdDir(t *testing.T) string {
 		t.Fatalf("failed to get working directory: %v", err)
 	}
 	return dir
+}
+
+// ============================================================================
+// End-to-End Pipeline Tests
+// ============================================================================
+
+// TestE2E_FullPipeline_ScanPlanExecute tests the complete pipeline:
+// scan → policy → safety → execute with real filesystem verification.
+func TestE2E_FullPipeline_ScanPlanExecute(t *testing.T) {
+	// Create test directory structure:
+	// root/
+	//   old_eligible.tmp      (old, small, .tmp extension - SHOULD BE DELETED)
+	//   old_eligible.log      (old, .log extension - SHOULD BE DELETED)
+	//   new_file.tmp          (new, .tmp extension - SHOULD BE PRESERVED: too new)
+	//   old_excluded.tmp      (old, matches exclusion - SHOULD BE PRESERVED)
+	//   important.txt         (old, wrong extension - SHOULD BE PRESERVED)
+	//   protected/            (directory - SHOULD BE PRESERVED: protected)
+	//     secret.tmp          (old, .tmp - SHOULD BE PRESERVED: under protected path)
+
+	root := t.TempDir()
+	protectedDir := filepath.Join(root, "protected")
+	if err := os.MkdirAll(protectedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Helper to create file with specific age
+	createFile := func(path string, content string, daysOld int) {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if daysOld > 0 {
+			oldTime := time.Now().Add(-time.Duration(daysOld) * 24 * time.Hour)
+			if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Files that SHOULD be deleted (old enough, matching extension, not excluded)
+	oldEligibleTmp := filepath.Join(root, "old_eligible.tmp")
+	oldEligibleLog := filepath.Join(root, "old_eligible.log")
+	createFile(oldEligibleTmp, "delete me tmp", 40)
+	createFile(oldEligibleLog, "delete me log", 40)
+
+	// Files that SHOULD be preserved
+	newFileTmp := filepath.Join(root, "new_file.tmp")
+	oldExcludedTmp := filepath.Join(root, "keep_old_excluded.tmp") // matches "keep_*" exclusion
+	importantTxt := filepath.Join(root, "important.txt")
+	protectedSecret := filepath.Join(protectedDir, "secret.tmp")
+	createFile(newFileTmp, "too new", 5)          // Only 5 days old
+	createFile(oldExcludedTmp, "excluded", 40)    // Old but excluded by pattern
+	createFile(importantTxt, "wrong ext", 40)     // Old but wrong extension
+	createFile(protectedSecret, "protected", 40)  // Old but under protected path
+
+	// Set up audit database
+	auditDBPath := filepath.Join(t.TempDir(), "audit.db")
+	aud, err := auditor.NewSQLite(auditor.SQLiteConfig{Path: auditDBPath})
+	if err != nil {
+		t.Fatalf("failed to create auditor: %v", err)
+	}
+	defer aud.Close()
+
+	// Initialize components
+	scan := scanner.NewWalkDir()
+	plan := planner.NewSimple()
+	safeEngine := safety.New()
+	exec := executor.NewSimple(safeEngine, core.SafetyConfig{
+		AllowedRoots:   []string{root},
+		ProtectedPaths: []string{protectedDir},
+	}).WithAuditor(aud)
+
+	// Policy: age >= 30 days AND extensions .tmp or .log AND NOT keep_*
+	agePolicy := policy.NewAgePolicy(30)
+	extPolicy := policy.NewExtensionPolicy([]string{".tmp", ".log"})
+	exclPolicy := policy.NewExclusionPolicy([]string{"keep_*"})
+	compositePolicy := policy.NewCompositePolicy(policy.ModeAnd, agePolicy, extPolicy, exclPolicy)
+
+	safetyCfg := core.SafetyConfig{
+		AllowedRoots:   []string{root},
+		ProtectedPaths: []string{protectedDir},
+		AllowDirDelete: false,
+	}
+
+	env := core.EnvSnapshot{Now: time.Now()}
+
+	// === PHASE 1: SCAN ===
+	ctx := context.Background()
+	scanReq := core.ScanRequest{
+		Roots:        []string{root},
+		Recursive:    true,
+		IncludeFiles: true,
+		IncludeDirs:  false,
+	}
+
+	candCh, errCh := scan.Scan(ctx, scanReq)
+
+	// Drain error channel in background
+	go func() {
+		for err := range errCh {
+			if err != nil {
+				t.Logf("scan error: %v", err)
+			}
+		}
+	}()
+
+	// === PHASE 2: PLAN ===
+	planItems, err := plan.BuildPlan(ctx, candCh, compositePolicy, safeEngine, env, safetyCfg)
+	if err != nil {
+		t.Fatalf("BuildPlan failed: %v", err)
+	}
+
+	t.Logf("Plan built with %d items", len(planItems))
+
+	// === PHASE 3: EXECUTE ===
+	var results []core.ActionResult
+	for _, item := range planItems {
+		// Record plan event
+		aud.Record(ctx, core.NewPlanAuditEvent(root, core.ModeExecute, item))
+
+		// Execute
+		result := exec.Execute(ctx, item, core.ModeExecute)
+		results = append(results, result)
+	}
+
+	// === PHASE 4: VERIFY ===
+
+	// Check which files still exist
+	filesExist := func(path string) bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}
+
+	// Files that SHOULD have been deleted
+	if filesExist(oldEligibleTmp) {
+		t.Error("old_eligible.tmp should have been deleted")
+	}
+	if filesExist(oldEligibleLog) {
+		t.Error("old_eligible.log should have been deleted")
+	}
+
+	// Files that SHOULD be preserved
+	if !filesExist(newFileTmp) {
+		t.Error("new_file.tmp should be preserved (too new)")
+	}
+	if !filesExist(oldExcludedTmp) {
+		t.Error("keep_old_excluded.tmp should be preserved (excluded by pattern)")
+	}
+	if !filesExist(importantTxt) {
+		t.Error("important.txt should be preserved (wrong extension)")
+	}
+	if !filesExist(protectedSecret) {
+		t.Error("protected/secret.tmp should be preserved (under protected path)")
+	}
+
+	// Verify results breakdown
+	var deleted, preserved int
+	for _, r := range results {
+		if r.Deleted {
+			deleted++
+		} else {
+			preserved++
+		}
+	}
+
+	t.Logf("Results: %d deleted, %d preserved", deleted, preserved)
+
+	if deleted != 2 {
+		t.Errorf("expected 2 files deleted, got %d", deleted)
+	}
+
+	// Verify audit records
+	records, err := aud.Query(ctx, auditor.QueryFilter{Limit: 100})
+	if err != nil {
+		t.Fatalf("failed to query audit: %v", err)
+	}
+
+	t.Logf("Audit records: %d", len(records))
+
+	// Should have plan events + execute events
+	if len(records) < len(planItems) {
+		t.Errorf("expected at least %d audit records, got %d", len(planItems), len(records))
+	}
+
+	// Verify audit integrity
+	tampered, err := aud.VerifyIntegrity(ctx)
+	if err != nil {
+		t.Fatalf("failed to verify audit integrity: %v", err)
+	}
+	if len(tampered) > 0 {
+		t.Errorf("audit integrity check failed: %d tampered records", len(tampered))
+	}
+}
+
+// TestE2E_DryRunPreservesAllFiles tests that dry-run mode doesn't delete anything.
+func TestE2E_DryRunPreservesAllFiles(t *testing.T) {
+	root := t.TempDir()
+
+	// Create old files that would be eligible for deletion
+	oldTime := time.Now().Add(-40 * 24 * time.Hour)
+	for i := 0; i < 5; i++ {
+		path := filepath.Join(root, "old_file_"+string(rune('0'+i))+".tmp")
+		if err := os.WriteFile(path, []byte("content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Initialize pipeline
+	scan := scanner.NewWalkDir()
+	plan := planner.NewSimple()
+	safeEngine := safety.New()
+	exec := executor.NewSimple(safeEngine, core.SafetyConfig{
+		AllowedRoots: []string{root},
+	})
+
+	pol := policy.NewAgePolicy(30)
+	safetyCfg := core.SafetyConfig{AllowedRoots: []string{root}}
+	env := core.EnvSnapshot{Now: time.Now()}
+
+	ctx := context.Background()
+
+	// Scan
+	candCh, errCh := scan.Scan(ctx, core.ScanRequest{
+		Roots:        []string{root},
+		Recursive:    true,
+		IncludeFiles: true,
+	})
+	go func() { for range errCh { } }()
+
+	// Plan
+	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Execute in DRY-RUN mode
+	for _, item := range planItems {
+		result := exec.Execute(ctx, item, core.ModeDryRun)
+		if result.Deleted {
+			t.Errorf("dry-run should not delete files: %s", result.Path)
+		}
+		if result.Reason != "would_delete" && result.Reason != "policy_deny:too_new" {
+			// Could be policy deny if file was created just now
+			t.Logf("unexpected reason for %s: %s", result.Path, result.Reason)
+		}
+	}
+
+	// Verify all files still exist
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(entries) != 5 {
+		t.Errorf("expected 5 files preserved, got %d", len(entries))
+	}
+}
+
+// TestE2E_ProtectedPaths tests that protected paths are never deleted.
+func TestE2E_ProtectedPaths(t *testing.T) {
+	root := t.TempDir()
+	protectedDir := filepath.Join(root, "system")
+	if err := os.MkdirAll(protectedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create old files in both locations
+	oldTime := time.Now().Add(-40 * 24 * time.Hour)
+
+	regularFile := filepath.Join(root, "regular.tmp")
+	protectedFile := filepath.Join(protectedDir, "config.tmp")
+
+	if err := os.WriteFile(regularFile, []byte("regular"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(protectedFile, []byte("protected"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(regularFile, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(protectedFile, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pipeline with protected path
+	scan := scanner.NewWalkDir()
+	plan := planner.NewSimple()
+	safeEngine := safety.New()
+
+	safetyCfg := core.SafetyConfig{
+		AllowedRoots:   []string{root},
+		ProtectedPaths: []string{protectedDir},
+	}
+
+	exec := executor.NewSimple(safeEngine, safetyCfg)
+	pol := policy.NewAgePolicy(30)
+	env := core.EnvSnapshot{Now: time.Now()}
+	ctx := context.Background()
+
+	// Scan and plan
+	candCh, errCh := scan.Scan(ctx, core.ScanRequest{
+		Roots:        []string{root},
+		Recursive:    true,
+		IncludeFiles: true,
+	})
+	go func() { for range errCh { } }()
+
+	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Execute
+	for _, item := range planItems {
+		exec.Execute(ctx, item, core.ModeExecute)
+	}
+
+	// Regular file should be deleted
+	if _, err := os.Stat(regularFile); err == nil {
+		t.Error("regular.tmp should have been deleted")
+	}
+
+	// Protected file should still exist
+	if _, err := os.Stat(protectedFile); err != nil {
+		t.Error("protected config.tmp should NOT have been deleted")
+	}
+}
+
+// TestE2E_MultipleRoots tests scanning and cleaning multiple root directories.
+func TestE2E_MultipleRoots(t *testing.T) {
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+
+	oldTime := time.Now().Add(-40 * 24 * time.Hour)
+
+	// Create files in both roots
+	file1 := filepath.Join(root1, "file1.tmp")
+	file2 := filepath.Join(root2, "file2.tmp")
+
+	if err := os.WriteFile(file1, []byte("root1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file2, []byte("root2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file1, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(file2, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pipeline with multiple roots
+	scan := scanner.NewWalkDir()
+	plan := planner.NewSimple()
+	safeEngine := safety.New()
+
+	safetyCfg := core.SafetyConfig{
+		AllowedRoots: []string{root1, root2},
+	}
+
+	exec := executor.NewSimple(safeEngine, safetyCfg)
+	pol := policy.NewAgePolicy(30)
+	env := core.EnvSnapshot{Now: time.Now()}
+	ctx := context.Background()
+
+	// Scan both roots
+	candCh, errCh := scan.Scan(ctx, core.ScanRequest{
+		Roots:        []string{root1, root2},
+		Recursive:    true,
+		IncludeFiles: true,
+	})
+	go func() { for range errCh { } }()
+
+	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should have found files from both roots
+	var fromRoot1, fromRoot2 int
+	for _, item := range planItems {
+		if strings.HasPrefix(item.Candidate.Path, root1) {
+			fromRoot1++
+		}
+		if strings.HasPrefix(item.Candidate.Path, root2) {
+			fromRoot2++
+		}
+	}
+
+	if fromRoot1 == 0 {
+		t.Error("no files found from root1")
+	}
+	if fromRoot2 == 0 {
+		t.Error("no files found from root2")
+	}
+
+	// Execute
+	var deleted int
+	for _, item := range planItems {
+		result := exec.Execute(ctx, item, core.ModeExecute)
+		if result.Deleted {
+			deleted++
+		}
+	}
+
+	// Both files should be deleted
+	if deleted != 2 {
+		t.Errorf("expected 2 files deleted from both roots, got %d", deleted)
+	}
+}
+
+// TestE2E_AuditRecordsMatchActions verifies audit records accurately reflect actions.
+func TestE2E_AuditRecordsMatchActions(t *testing.T) {
+	root := t.TempDir()
+	auditDBPath := filepath.Join(t.TempDir(), "audit.db")
+
+	// Create mixed files
+	oldTime := time.Now().Add(-40 * 24 * time.Hour)
+
+	toDelete := filepath.Join(root, "delete_me.tmp")
+	toPreserve := filepath.Join(root, "preserve_me.txt") // wrong extension
+
+	if err := os.WriteFile(toDelete, []byte("delete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(toPreserve, []byte("preserve"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(toDelete, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(toPreserve, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up auditor
+	aud, err := auditor.NewSQLite(auditor.SQLiteConfig{Path: auditDBPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer aud.Close()
+
+	// Pipeline
+	scan := scanner.NewWalkDir()
+	plan := planner.NewSimple()
+	safeEngine := safety.New()
+
+	safetyCfg := core.SafetyConfig{AllowedRoots: []string{root}}
+	exec := executor.NewSimple(safeEngine, safetyCfg).WithAuditor(aud)
+
+	// Policy requires .tmp extension
+	agePolicy := policy.NewAgePolicy(30)
+	extPolicy := policy.NewExtensionPolicy([]string{".tmp"})
+	pol := policy.NewCompositePolicy(policy.ModeAnd, agePolicy, extPolicy)
+
+	env := core.EnvSnapshot{Now: time.Now()}
+	ctx := context.Background()
+
+	// Scan and plan
+	candCh, errCh := scan.Scan(ctx, core.ScanRequest{
+		Roots:        []string{root},
+		Recursive:    true,
+		IncludeFiles: true,
+	})
+	go func() { for range errCh { } }()
+
+	planItems, err := plan.BuildPlan(ctx, candCh, pol, safeEngine, env, safetyCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Execute and track actual outcomes
+	actualDeleted := make(map[string]bool)
+	for _, item := range planItems {
+		result := exec.Execute(ctx, item, core.ModeExecute)
+		if result.Deleted {
+			actualDeleted[result.Path] = true
+		}
+	}
+
+	// Query audit records
+	records, err := aud.Query(ctx, auditor.QueryFilter{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify audit records match reality
+	for _, rec := range records {
+		if rec.Action == "delete" {
+			if !actualDeleted[rec.Path] {
+				t.Errorf("audit says deleted %s but it wasn't actually deleted", rec.Path)
+			}
+		}
+	}
+
+	// Verify delete_me.tmp was deleted
+	if !actualDeleted[toDelete] {
+		t.Error("delete_me.tmp should have been deleted")
+	}
+
+	// Verify preserve_me.txt was NOT deleted
+	if actualDeleted[toPreserve] {
+		t.Error("preserve_me.txt should NOT have been deleted")
+	}
 }
