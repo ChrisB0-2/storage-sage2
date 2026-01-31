@@ -1,0 +1,49 @@
+StorageSage (DRY PIPELINE)
+roots: [/tmp/storage-sage-smoke-QxLVDJ/scan_root]
+candidates: 7
+policy allowed: 4
+safety allowed: 5
+eligible bytes (policy+safe): 79
+safety blocked: 2
+safety reasons:
+  - protected_path: 1
+  - symlink_self: 1
+
+
+First 7 plan items:
+- /tmp/storage-sage-smoke-QxLVDJ/scan_root/old_files/old_file3.bak | score=0 | policy=and_allow | safety=ok
+- /tmp/storage-sage-smoke-QxLVDJ/scan_root/old_files/old_file1.tmp | score=0 | policy=and_allow | safety=ok
+- /tmp/storage-sage-smoke-QxLVDJ/scan_root/old_files/old_file2.log | score=0 | policy=and_allow | safety=ok
+- /tmp/storage-sage-smoke-QxLVDJ/scan_root/escape_link | score=0 | policy=and_deny:too_new | safety=symlink_self:/tmp/storage-sage-smoke-QxLVDJ/scan_root/escape_link
+- /tmp/storage-sage-smoke-QxLVDJ/scan_root/protected_area/protected_file.old | score=0 | policy=and_allow | safety=protected_path
+- /tmp/storage-sage-smoke-QxLVDJ/scan_root/keep/data.important | score=0 | policy=and_deny:excluded:*.important | safety=ok
+- /tmp/storage-sage-smoke-QxLVDJ/scan_root/new_file.txt | score=0 | policy=and_deny:too_new | safety=ok
+
+=== EXECUTE MODE LOGS ===
+StorageSage (EXECUTE PIPELINE)
+roots: [/tmp/storage-sage-exec-jhSNLr/scan_root]
+candidates: 7
+policy allowed: 4
+safety allowed: 5
+eligible bytes (policy+safe): 79
+safety blocked: 2
+safety reasons:
+  - protected_path: 1
+  - symlink_self: 1
+
+
+actions attempted: 3
+deleted: 3
+bytes freed: 79
+execute denies: 0
+already gone: 0
+delete failed: 0
+
+First 7 plan items:
+- /tmp/storage-sage-exec-jhSNLr/scan_root/old_files/old_file3.bak | score=0 | policy=and_allow | safety=ok
+- /tmp/storage-sage-exec-jhSNLr/scan_root/old_files/old_file1.tmp | score=0 | policy=and_allow | safety=ok
+- /tmp/storage-sage-exec-jhSNLr/scan_root/old_files/old_file2.log | score=0 | policy=and_allow | safety=ok
+- /tmp/storage-sage-exec-jhSNLr/scan_root/escape_link | score=0 | policy=and_deny:too_new | safety=symlink_self:/tmp/storage-sage-exec-jhSNLr/scan_root/escape_link
+- /tmp/storage-sage-exec-jhSNLr/scan_root/protected_area/protected_file.old | score=0 | policy=and_allow | safety=protected_path
+- /tmp/storage-sage-exec-jhSNLr/scan_root/keep/data.important | score=0 | policy=and_deny:excluded:*.important | safety=ok
+- /tmp/storage-sage-exec-jhSNLr/scan_root/new_file.txt | score=0 | policy=and_deny:too_new | safety=ok
