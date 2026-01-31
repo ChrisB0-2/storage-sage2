@@ -29,17 +29,19 @@ Most cleanup tools are "delete first, regret later." Storage-Sage inverts this:
 
 ## Installation
 
+Storage-Sage is distributed as a standalone Linux binary.
+Go is only required if building from source.
+
+### Recommended (Binary Install)
+
 ```bash
-go install github.com/ChrisB0-2/storage-sage/cmd/storage-sage@latest
+curl -LO https://github.com/ChrisB0-2/storage-sage/releases/latest/download/storage-sage-linux-amd64
+chmod +x storage-sage-linux-amd64
+sudo mv storage-sage-linux-amd64 /usr/local/bin/storage-sage
+storage-sage --help
 ```
 
-Or build from source:
-
-```bash
-git clone https://github.com/ChrisB0-2/storage-sage.git
-cd storage-sage
-go build ./cmd/storage-sage
-```
+See [INSTALL.md](INSTALL.md) for all supported install options.
 
 ## Quick Start
 

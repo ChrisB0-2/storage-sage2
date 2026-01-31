@@ -1,0 +1,13 @@
+[Unit]
+Description=Storage-Sage Filesystem Cleanup Daemon
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/storage-sage
+User=root
+Group=root
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
