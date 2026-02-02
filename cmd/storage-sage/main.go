@@ -1541,8 +1541,8 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 		}
 	}
 
-	// Print plan summary
-	printPlanSummary(plan, runMode, cfg.Scan.Roots)
+	// Log plan summary
+	printPlanSummary(plan, runMode, cfg.Scan.Roots, log)
 
 	// Execute pass (only in execute mode)
 	if runMode == core.ModeExecute {
@@ -1597,17 +1597,13 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 			}
 		}
 
-		fmt.Printf("actions attempted: %d\n", actionsAttempted)
-		fmt.Printf("deleted: %d\n", deletedCount)
-		fmt.Printf("bytes freed: %d\n", bytesFreed)
-		fmt.Printf("execute denies: %d\n", executeDenied)
-		fmt.Printf("already gone: %d\n", alreadyGone)
-		fmt.Printf("delete failed: %d\n", deleteFailed)
-		fmt.Println()
-
 		log.Info("execution complete",
+			logger.F("actions_attempted", actionsAttempted),
 			logger.F("deleted", deletedCount),
 			logger.F("bytes_freed", bytesFreed),
+			logger.F("execute_denies", executeDenied),
+			logger.F("already_gone", alreadyGone),
+			logger.F("delete_failed", deleteFailed),
 		)
 	}
 
@@ -1616,17 +1612,18 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 		limit = len(plan)
 	}
 
-	fmt.Printf("First %d plan items:\n", limit)
-
+	// Log plan items as structured data
+	planItems := make([]map[string]interface{}, 0, limit)
 	for i := 0; i < limit; i++ {
 		it := plan[i]
-		fmt.Printf("- %s | score=%d | policy=%s | safety=%s\n",
-			it.Candidate.Path,
-			it.Decision.Score,
-			it.Decision.Reason,
-			it.Safety.Reason,
-		)
+		planItems = append(planItems, map[string]interface{}{
+			"path":   it.Candidate.Path,
+			"score":  it.Decision.Score,
+			"policy": it.Decision.Reason,
+			"safety": it.Safety.Reason,
+		})
 	}
+	log.Info("plan items", logger.F("items", planItems))
 
 	return nil
 }
@@ -1639,8 +1636,8 @@ func reasonKey(s string) string {
 	return s
 }
 
-// printPlanSummary calculates and prints a summary of the cleanup plan.
-func printPlanSummary(plan []core.PlanItem, runMode core.Mode, roots []string) {
+// printPlanSummary calculates and logs a summary of the cleanup plan.
+func printPlanSummary(plan []core.PlanItem, runMode core.Mode, roots []string, log logger.Logger) {
 	var (
 		total         = len(plan)
 		policyAllowed int
@@ -1664,31 +1661,24 @@ func printPlanSummary(plan []core.PlanItem, runMode core.Mode, roots []string) {
 		}
 	}
 
+	pipelineType := "dry-run"
 	if runMode == core.ModeExecute {
-		fmt.Printf("StorageSage (EXECUTE PIPELINE)\n")
-	} else {
-		fmt.Printf("StorageSage (DRY PIPELINE)\n")
+		pipelineType = "execute"
 	}
 
-	fmt.Printf("roots: %v\n", roots)
-	fmt.Printf("candidates: %d\n", total)
-	fmt.Printf("policy allowed: %d\n", policyAllowed)
-	fmt.Printf("safety allowed: %d\n", safetyAllowed)
-	fmt.Printf("eligible bytes (policy+safe): %d\n", eligibleBytes)
-	fmt.Printf("safety blocked: %d\n", total-safetyAllowed)
+	log.Info("plan summary",
+		logger.F("pipeline", pipelineType),
+		logger.F("roots", roots),
+		logger.F("candidates", total),
+		logger.F("policy_allowed", policyAllowed),
+		logger.F("safety_allowed", safetyAllowed),
+		logger.F("eligible_bytes", eligibleBytes),
+		logger.F("safety_blocked", total-safetyAllowed),
+	)
+
 	if len(reasonCounts) > 0 {
-		keys := make([]string, 0, len(reasonCounts))
-		for k := range reasonCounts {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		fmt.Println("safety reasons:")
-		for _, k := range keys {
-			fmt.Printf("  - %s: %d\n", k, reasonCounts[k])
-		}
-		fmt.Println()
+		log.Info("safety block reasons", logger.F("reasons", reasonCounts))
 	}
-	fmt.Println()
 }
 
 // buildPolicy constructs a composite policy from configuration.
