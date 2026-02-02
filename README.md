@@ -45,7 +45,26 @@ See [INSTALL.md](INSTALL.md) for all supported install options.
 
 ## Quick Start
 
-### Preview what would be deleted (dry-run)
+### First-time setup (recommended)
+
+```bash
+# Initialize configuration, directories, and defaults
+storage-sage init
+
+# Start the daemon with web UI
+storage-sage -daemon
+
+# Open http://localhost:8080 in your browser
+```
+
+The `init` command creates:
+- `~/.config/storage-sage/config.yaml` - configuration file
+- `~/.local/share/storage-sage/audit.db` - audit database
+- `~/.local/share/storage-sage/trash/` - soft-delete trash directory
+
+Default settings: scans `/tmp` and `/var/tmp`, 7-day file age, dry-run mode (safe).
+
+### One-shot usage (no setup required)
 
 ```bash
 # Find files older than 30 days in /tmp
@@ -71,6 +90,69 @@ storage-sage -root /tmp -mode execute -audit /var/log/storage-sage.jsonl
 # Include empty directories in cleanup
 storage-sage -root /data/temp -mode execute -allow-dir-delete
 ```
+
+## Configuration
+
+After running `storage-sage init`, edit the config file to customize behavior:
+
+```bash
+# Edit configuration
+nano ~/.config/storage-sage/config.yaml
+```
+
+### Common configuration changes
+
+**Add directories to scan:**
+```yaml
+scan:
+  roots:
+    - /tmp
+    - /var/tmp
+    - /home/user/Downloads
+```
+
+**Enable actual deletion:**
+```yaml
+execution:
+  mode: execute    # change from "dry-run"
+```
+
+**Change file age threshold:**
+```yaml
+policy:
+  min_age_days: 30    # delete files older than 30 days
+```
+
+**Only delete certain file types:**
+```yaml
+policy:
+  extensions:
+    - ".tmp"
+    - ".log"
+    - ".bak"
+```
+
+**Change cleanup schedule:**
+```yaml
+daemon:
+  schedule: "1h"    # every hour
+```
+
+**Change web UI port:**
+```yaml
+daemon:
+  http_addr: ":9000"
+```
+
+### CLI flag overrides
+
+CLI flags override config file values:
+
+```bash
+storage-sage -daemon -root /var/log -mode execute -schedule 30m
+```
+
+See `config.example.yaml` for all available options.
 
 ## Safety Architecture
 
