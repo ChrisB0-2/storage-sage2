@@ -1,0 +1,102 @@
+# Storage Sage - Default Configuration
+# Copy to ~/.config/storage-sage/config.yaml to get started
+#
+# Quick start:
+#   mkdir -p ~/.config/storage-sage
+#   cp config.default.yaml ~/.config/storage-sage/config.yaml
+#   storage-sage -daemon
+#
+# Or run directly with this config:
+#   storage-sage -config config.default.yaml -daemon
+
+version: 1
+
+# =============================================================================
+# Scan Configuration - What directories to clean
+# =============================================================================
+scan:
+  roots:
+    - /tmp
+    - /var/tmp
+  recursive: true
+  max_depth: 0
+  include_files: true
+  include_dirs: false
+
+# =============================================================================
+# Policy Configuration - What files to delete
+# =============================================================================
+policy:
+  # Only delete files older than 7 days
+  min_age_days: 7
+
+  # No minimum size (delete small files too)
+  min_size_mb: 0
+
+  # Target common temporary file types (empty = all files)
+  extensions: []
+
+  # Never delete these patterns
+  exclusions:
+    - ".gitkeep"
+    - "*.socket"
+    - "*.sock"
+    - "*.lock"
+    - "*.pid"
+
+# =============================================================================
+# Safety Configuration - Protect critical paths
+# =============================================================================
+safety:
+  protected_paths:
+    - /boot
+    - /etc
+    - /usr
+    - /var
+    - /sys
+    - /proc
+    - /dev
+    - /home
+    - /root
+  allow_dir_delete: false
+  enforce_mount_boundary: false
+
+# =============================================================================
+# Execution Configuration
+# =============================================================================
+execution:
+  # Start in dry-run mode for safety - change to "execute" when ready
+  mode: dry-run
+  timeout: 5m
+  max_items: 50
+
+  # Audit logging - track all decisions
+  audit_db_path: ~/.local/share/storage-sage/audit.db
+
+  # Soft-delete - files go to trash first (recoverable!)
+  trash_path: ~/.local/share/storage-sage/trash
+  trash_max_age: 168h  # 7 days before permanent deletion
+
+# =============================================================================
+# Logging
+# =============================================================================
+logging:
+  level: info
+  format: json
+  output: stderr
+
+# =============================================================================
+# Daemon Configuration
+# =============================================================================
+daemon:
+  enabled: true
+  http_addr: ":8080"
+  schedule: "6h"
+  trigger_timeout: 30m
+
+# =============================================================================
+# Metrics (Prometheus)
+# =============================================================================
+metrics:
+  enabled: true
+  namespace: storage_sage
