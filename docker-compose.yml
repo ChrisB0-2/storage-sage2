@@ -18,11 +18,14 @@ services:
       - "-loki"
       - "-loki-url=http://loki:3100"
       - "-audit-db=/var/lib/storage-sage/audit.db"
+      - "-trash-path=/var/lib/storage-sage/trash"
     volumes:
       # Mount the directory to clean
       - ./data:/data:rw,z
       # Audit database persistence
       - storage_sage_data:/var/lib/storage-sage
+      # Trash directory (for soft-delete recovery)
+      - ./trash:/var/lib/storage-sage/trash:rw,z
       # Optional: mount config file
       # - ./storage-sage.yaml:/etc/storage-sage/config.yaml:ro
     ports:
