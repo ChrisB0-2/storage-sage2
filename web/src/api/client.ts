@@ -9,6 +9,7 @@ import type {
   TrashItem,
   TrashRestoreResponse,
   TrashEmptyResponse,
+  SchedulerControlResponse,
 } from './types';
 
 class ApiClient {
@@ -103,6 +104,20 @@ class ApiClient {
     }
     return this.fetch<TrashEmptyResponse>(`/api/trash?${params.toString()}`, {
       method: 'DELETE',
+    });
+  }
+
+  // Scheduler start endpoint - POST /api/scheduler/start
+  async startScheduler(): Promise<SchedulerControlResponse> {
+    return this.fetch<SchedulerControlResponse>('/api/scheduler/start', {
+      method: 'POST',
+    });
+  }
+
+  // Scheduler stop endpoint - POST /api/scheduler/stop
+  async stopScheduler(): Promise<SchedulerControlResponse> {
+    return this.fetch<SchedulerControlResponse>('/api/scheduler/stop', {
+      method: 'POST',
     });
   }
 }

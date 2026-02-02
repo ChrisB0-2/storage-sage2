@@ -6,6 +6,7 @@ export interface StatusResponse {
   last_error: string;
   run_count: number;
   schedule: string;
+  scheduler_enabled: boolean;
 }
 
 export type DaemonState = 'starting' | 'ready' | 'running' | 'stopping' | 'stopped';
@@ -14,6 +15,12 @@ export type DaemonState = 'starting' | 'ready' | 'running' | 'stopping' | 'stopp
 export interface TriggerResponse {
   triggered: boolean;
   error?: string;
+}
+
+// Scheduler control response from POST /api/scheduler/start or /api/scheduler/stop
+export interface SchedulerControlResponse {
+  enabled: boolean;
+  changed: boolean;
 }
 
 // Audit record from /api/audit/query

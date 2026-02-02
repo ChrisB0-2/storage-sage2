@@ -121,6 +121,10 @@ type Daemon struct {
 	runsWG      sync.WaitGroup // tracks in-flight runs (scheduled + API-triggered)
 	httpServer  *http.Server
 	pidFile     *pidfile.PIDFile
+
+	// Scheduler control
+	schedulerEnabled atomic.Bool   // true = scheduler active, false = paused
+	schedulerPauseCh chan struct{} // wake scheduler on state change
 }
 
 // Config holds daemon configuration.
@@ -157,21 +161,23 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 	}
 
 	d := &Daemon{
-		log:            log,
-		runFunc:        runFunc,
-		schedule:       cfg.Schedule,
-		httpAddr:       cfg.HTTPAddr,
-		triggerTimeout: cfg.TriggerTimeout,
-		runWaitTimeout: cfg.RunWaitTimeout,
-		pidFilePath:    cfg.PIDFile,
-		cfg:            cfg.AppConfig,
-		auditor:        cfg.Auditor,
-		trash:          cfg.Trash,
-		authMiddleware: cfg.AuthMiddleware,
-		rbacMiddleware: cfg.RBACMiddleware,
-		stopCh:         make(chan struct{}),
+		log:              log,
+		runFunc:          runFunc,
+		schedule:         cfg.Schedule,
+		httpAddr:         cfg.HTTPAddr,
+		triggerTimeout:   cfg.TriggerTimeout,
+		runWaitTimeout:   cfg.RunWaitTimeout,
+		pidFilePath:      cfg.PIDFile,
+		cfg:              cfg.AppConfig,
+		auditor:          cfg.Auditor,
+		trash:            cfg.Trash,
+		authMiddleware:   cfg.AuthMiddleware,
+		rbacMiddleware:   cfg.RBACMiddleware,
+		stopCh:           make(chan struct{}),
+		schedulerPauseCh: make(chan struct{}, 1),
 	}
 	d.state.Store(int32(StateStarting))
+	d.schedulerEnabled.Store(true) // scheduler enabled by default
 
 	return d
 }
@@ -359,6 +365,34 @@ func (d *Daemon) IsRunning() bool {
 	return d.running.Load()
 }
 
+// StartScheduler enables the scheduler. Returns true if state changed.
+func (d *Daemon) StartScheduler() bool {
+	if d.schedulerEnabled.CompareAndSwap(false, true) {
+		d.log.Info("scheduler enabled")
+		// Wake the scheduler to potentially run immediately
+		select {
+		case d.schedulerPauseCh <- struct{}{}:
+		default:
+		}
+		return true
+	}
+	return false
+}
+
+// StopScheduler disables the scheduler. Returns true if state changed.
+func (d *Daemon) StopScheduler() bool {
+	if d.schedulerEnabled.CompareAndSwap(true, false) {
+		d.log.Info("scheduler disabled")
+		return true
+	}
+	return false
+}
+
+// IsSchedulerEnabled returns true if the scheduler is enabled.
+func (d *Daemon) IsSchedulerEnabled() bool {
+	return d.schedulerEnabled.Load()
+}
+
 // LastRun returns info about the last run.
 func (d *Daemon) LastRun() (time.Time, int64, error) {
 	d.mu.RLock()
@@ -409,7 +443,15 @@ func (d *Daemon) runScheduler(ctx context.Context, done chan struct{}) {
 		case <-ctx.Done():
 			d.log.Debug("scheduler stopping")
 			return
+		case <-d.schedulerPauseCh:
+			// State change notification - just continue to re-evaluate
+			d.log.Debug("scheduler received state change notification")
 		case <-ticker.C:
+			// Check if scheduler is enabled before running
+			if !d.schedulerEnabled.Load() {
+				d.log.Debug("skipping scheduled run - scheduler disabled")
+				continue
+			}
 			if d.running.CompareAndSwap(false, true) {
 				// Track this run for graceful shutdown
 				d.runsWG.Add(1)
@@ -613,12 +655,13 @@ func (d *Daemon) startHTTP() error {
 		}
 
 		d.writeJSONResponse(w, http.StatusOK, map[string]any{
-			"state":      d.State().String(),
-			"running":    d.IsRunning(),
-			"last_run":   lastRunStr,
-			"last_error": errStr,
-			"run_count":  runCount,
-			"schedule":   d.schedule,
+			"state":             d.State().String(),
+			"running":           d.IsRunning(),
+			"last_run":          lastRunStr,
+			"last_error":        errStr,
+			"run_count":         runCount,
+			"schedule":          d.schedule,
+			"scheduler_enabled": d.IsSchedulerEnabled(),
 		})
 	})
 
@@ -653,6 +696,8 @@ func (d *Daemon) startHTTP() error {
 	mux.HandleFunc("/api/audit/stats", d.handleAuditStats)
 	mux.HandleFunc("/api/trash", d.handleTrash)
 	mux.HandleFunc("/api/trash/restore", d.handleTrashRestore)
+	mux.HandleFunc("/api/scheduler/start", d.handleSchedulerStart)
+	mux.HandleFunc("/api/scheduler/stop", d.handleSchedulerStop)
 
 	// Serve embedded frontend (SPA with fallback to index.html)
 	d.setupStaticFileServer(mux)
@@ -1004,6 +1049,40 @@ func (d *Daemon) handleTrashRestore(w http.ResponseWriter, r *http.Request) {
 	d.writeJSONResponse(w, http.StatusOK, map[string]any{
 		"restored":      true,
 		"original_path": originalPath,
+	})
+}
+
+// handleSchedulerStart enables the scheduler.
+func (d *Daemon) handleSchedulerStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	changed := d.StartScheduler()
+	d.writeJSONResponse(w, http.StatusOK, map[string]any{
+		"enabled": true,
+		"changed": changed,
+	})
+}
+
+// handleSchedulerStop disables the scheduler.
+func (d *Daemon) handleSchedulerStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	changed := d.StopScheduler()
+	d.writeJSONResponse(w, http.StatusOK, map[string]any{
+		"enabled": false,
+		"changed": changed,
 	})
 }
 

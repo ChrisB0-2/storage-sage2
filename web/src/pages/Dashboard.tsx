@@ -2,6 +2,7 @@ import { useStatus } from '../hooks/useStatus';
 import { useAuditStats } from '../hooks/useAuditHistory';
 import StatusCard from '../components/StatusCard';
 import TriggerButton from '../components/TriggerButton';
+import SchedulerControl from '../components/SchedulerControl';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -35,6 +36,7 @@ export default function Dashboard() {
           error={statusError}
         />
         <TriggerButton status={status} />
+        <SchedulerControl status={status} isLoading={statusLoading} />
       </div>
 
       {/* Quick Stats */}
