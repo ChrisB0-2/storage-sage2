@@ -27,6 +27,20 @@ Most cleanup tools are "delete first, regret later." Storage-Sage inverts this:
 - **Prometheus metrics**: Built-in metrics endpoint for monitoring
 - **Zero dependencies**: Pure Go standard library for maximum reliability (plus optional Prometheus)
 
+## Version Compatibility
+
+| Feature | Minimum Version |
+|---------|-----------------|
+| `init` command | v0.3.0 |
+| Trash CLI (`trash list/restore/empty`) | v0.3.0 |
+| Web UI dashboard | v0.3.0 |
+| PID file (`-pid-file`) | v0.3.0 |
+| API authentication | v0.3.0 |
+| Soft-delete (`-trash-path`) | v0.2.0 |
+| Daemon mode | v0.2.0 |
+| SQLite audit (`-audit-db`) | v0.2.0 |
+| Core scanning/deletion | v0.1.0 |
+
 ## Installation
 
 Storage-Sage is distributed as a standalone Linux binary.
