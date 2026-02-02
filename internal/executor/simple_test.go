@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/ChrisB0-2/storage-sage/internal/core"
+	"github.com/ChrisB0-2/storage-sage/internal/daemon"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 	"github.com/ChrisB0-2/storage-sage/internal/safety"
+	"github.com/ChrisB0-2/storage-sage/internal/trash"
 )
 
 // mockSafety implements core.Safety for testing
@@ -1414,4 +1416,190 @@ func TestConcurrentDeletions_WithContextCancellation(t *testing.T) {
 	// Some deletions should have been canceled
 	// (exact number depends on timing, so we just verify it handles gracefully)
 	t.Logf("Canceled: %d out of %d", canceledCount.Load(), numFiles)
+}
+
+func TestExecuteWithTrash(t *testing.T) {
+	dir := t.TempDir()
+	trashDir := filepath.Join(dir, "trash")
+	if err := os.MkdirAll(trashDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	testFile := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create trash manager
+	trashMgr, err := trash.New(trash.Config{
+		TrashPath: trashDir,
+		MaxAge:    time.Hour,
+	}, logger.NewNop())
+	if err != nil {
+		t.Fatalf("failed to create trash manager: %v", err)
+	}
+
+	safe := &mockSafety{allowed: true, reason: "ok"}
+	cfg := core.SafetyConfig{AllowedRoots: []string{dir}}
+	exec := NewSimple(safe, cfg).WithTrash(trashMgr)
+
+	item := core.PlanItem{
+		Candidate: core.Candidate{
+			Path:      testFile,
+			Type:      core.TargetFile,
+			SizeBytes: 5,
+		},
+		Decision: core.Decision{Allow: true, Reason: "age_ok"},
+		Safety:   core.SafetyVerdict{Allowed: true, Reason: "ok"},
+	}
+
+	result := exec.Execute(context.Background(), item, core.ModeExecute)
+
+	if !result.Deleted {
+		t.Errorf("expected Deleted=true, got false (reason: %s)", result.Reason)
+	}
+	if result.Reason != "trashed" {
+		t.Errorf("expected reason 'trashed', got '%s'", result.Reason)
+	}
+
+	// Original file should be gone
+	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+		t.Error("file should have been moved to trash")
+	}
+
+	// Check that file is in trash
+	items, err := trashMgr.List()
+	if err != nil {
+		t.Fatalf("failed to list trash: %v", err)
+	}
+	if len(items) != 1 {
+		t.Errorf("expected 1 item in trash, got %d", len(items))
+	}
+}
+
+func TestExecuteBypassTrash(t *testing.T) {
+	dir := t.TempDir()
+	trashDir := filepath.Join(dir, "trash")
+	if err := os.MkdirAll(trashDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	testFile := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create trash manager
+	trashMgr, err := trash.New(trash.Config{
+		TrashPath: trashDir,
+		MaxAge:    time.Hour,
+	}, logger.NewNop())
+	if err != nil {
+		t.Fatalf("failed to create trash manager: %v", err)
+	}
+
+	safe := &mockSafety{allowed: true, reason: "ok"}
+	cfg := core.SafetyConfig{AllowedRoots: []string{dir}}
+	exec := NewSimple(safe, cfg).WithTrash(trashMgr)
+
+	item := core.PlanItem{
+		Candidate: core.Candidate{
+			Path:      testFile,
+			Type:      core.TargetFile,
+			SizeBytes: 5,
+		},
+		Decision: core.Decision{Allow: true, Reason: "age_ok"},
+		Safety:   core.SafetyVerdict{Allowed: true, Reason: "ok"},
+	}
+
+	// Create context with bypass trash flag
+	ctx := context.WithValue(context.Background(), daemon.ContextKeyBypassTrash, true)
+
+	result := exec.Execute(ctx, item, core.ModeExecute)
+
+	if !result.Deleted {
+		t.Errorf("expected Deleted=true, got false (reason: %s)", result.Reason)
+	}
+	if result.Reason != "deleted" {
+		t.Errorf("expected reason 'deleted' (permanent), got '%s'", result.Reason)
+	}
+
+	// Original file should be gone
+	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+		t.Error("file should have been permanently deleted")
+	}
+
+	// Trash should be empty
+	items, err := trashMgr.List()
+	if err != nil {
+		t.Fatalf("failed to list trash: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected 0 items in trash (bypass mode), got %d", len(items))
+	}
+}
+
+func TestExecuteBypassTrashDirectory(t *testing.T) {
+	dir := t.TempDir()
+	trashDir := filepath.Join(dir, "trash")
+	if err := os.MkdirAll(trashDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a directory with files
+	testDir := filepath.Join(dir, "testdir")
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create trash manager
+	trashMgr, err := trash.New(trash.Config{
+		TrashPath: trashDir,
+		MaxAge:    time.Hour,
+	}, logger.NewNop())
+	if err != nil {
+		t.Fatalf("failed to create trash manager: %v", err)
+	}
+
+	safe := &mockSafety{allowed: true, reason: "ok"}
+	cfg := core.SafetyConfig{AllowedRoots: []string{dir}, AllowDirDelete: true}
+	exec := NewSimple(safe, cfg).WithTrash(trashMgr)
+
+	item := core.PlanItem{
+		Candidate: core.Candidate{
+			Path: testDir,
+			Type: core.TargetDir,
+		},
+		Decision: core.Decision{Allow: true, Reason: "empty_dir"},
+		Safety:   core.SafetyVerdict{Allowed: true, Reason: "ok"},
+	}
+
+	// Create context with bypass trash flag
+	ctx := context.WithValue(context.Background(), daemon.ContextKeyBypassTrash, true)
+
+	result := exec.Execute(ctx, item, core.ModeExecute)
+
+	if !result.Deleted {
+		t.Errorf("expected Deleted=true, got false (reason: %s)", result.Reason)
+	}
+	if result.Reason != "deleted" {
+		t.Errorf("expected reason 'deleted' (permanent), got '%s'", result.Reason)
+	}
+
+	// Directory should be gone
+	if _, err := os.Stat(testDir); !os.IsNotExist(err) {
+		t.Error("directory should have been permanently deleted")
+	}
+
+	// Trash should be empty
+	items, err := trashMgr.List()
+	if err != nil {
+		t.Fatalf("failed to list trash: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected 0 items in trash (bypass mode), got %d", len(items))
+	}
 }

@@ -37,6 +37,29 @@ const (
 	StateStopped
 )
 
+// Disk usage thresholds for auto-cleanup behavior.
+const (
+	// DiskThresholdCleanupTrash triggers trash cleanup before the main run.
+	DiskThresholdCleanupTrash = 90.0
+	// DiskThresholdBypassTrash triggers permanent deletion (bypass trash entirely).
+	DiskThresholdBypassTrash = 95.0
+)
+
+// contextKey is used for context values in this package.
+type contextKey string
+
+// ContextKeyBypassTrash is the context key for signaling trash bypass mode.
+// When set to true, the executor should permanently delete instead of trashing.
+const ContextKeyBypassTrash contextKey = "bypass_trash"
+
+// BypassTrashFromContext extracts the bypass trash flag from context.
+func BypassTrashFromContext(ctx context.Context) bool {
+	if v, ok := ctx.Value(ContextKeyBypassTrash).(bool); ok {
+		return v
+	}
+	return false
+}
+
 // State string constants.
 const (
 	stateStrStarting = "starting"
@@ -434,6 +457,9 @@ func (d *Daemon) executeRun(ctx context.Context) error {
 	d.log.Info("starting cleanup run")
 	start := time.Now()
 
+	// Pre-run disk check: cleanup trash if needed, bypass trash if critical
+	ctx = d.checkDiskAndPrepare(ctx)
+
 	err := d.runFunc(ctx)
 
 	d.mu.Lock()
@@ -452,6 +478,66 @@ func (d *Daemon) executeRun(ctx context.Context) error {
 	}
 
 	return err
+}
+
+// checkDiskAndPrepare checks disk usage and takes appropriate action:
+// - If >90%: runs trash.Cleanup() to purge old trash items
+// - If >95%: sets context flag to bypass trash (permanent delete only)
+func (d *Daemon) checkDiskAndPrepare(ctx context.Context) context.Context {
+	if d.cfg == nil || len(d.cfg.Scan.Roots) == 0 {
+		return ctx
+	}
+
+	// Check disk usage across all scan roots
+	var maxUsage float64
+	var maxPath string
+	for _, root := range d.cfg.Scan.Roots {
+		usage, err := getDiskUsagePercent(root)
+		if err != nil {
+			d.log.Warn("disk check failed", logger.F("path", root), logger.F("error", err.Error()))
+			continue
+		}
+		if usage > maxUsage {
+			maxUsage = usage
+			maxPath = root
+		}
+	}
+
+	if maxUsage == 0 {
+		return ctx
+	}
+
+	d.log.Debug("disk usage check",
+		logger.F("max_usage_percent", fmt.Sprintf("%.1f", maxUsage)),
+		logger.F("path", maxPath))
+
+	// Critical: bypass trash entirely if disk is nearly full
+	if maxUsage > DiskThresholdBypassTrash {
+		d.log.Warn("disk critically full, bypassing trash for this run",
+			logger.F("usage_percent", fmt.Sprintf("%.1f", maxUsage)),
+			logger.F("threshold", fmt.Sprintf("%.1f", DiskThresholdBypassTrash)),
+			logger.F("path", maxPath))
+		return context.WithValue(ctx, ContextKeyBypassTrash, true)
+	}
+
+	// High usage: cleanup trash first to free space
+	if maxUsage > DiskThresholdCleanupTrash && d.trash != nil {
+		d.log.Info("disk usage high, running trash cleanup first",
+			logger.F("usage_percent", fmt.Sprintf("%.1f", maxUsage)),
+			logger.F("threshold", fmt.Sprintf("%.1f", DiskThresholdCleanupTrash)),
+			logger.F("path", maxPath))
+
+		count, bytesFreed, err := d.trash.Cleanup(ctx)
+		if err != nil {
+			d.log.Warn("pre-run trash cleanup failed", logger.F("error", err.Error()))
+		} else if count > 0 {
+			d.log.Info("pre-run trash cleanup completed",
+				logger.F("items_removed", count),
+				logger.F("bytes_freed", bytesFreed))
+		}
+	}
+
+	return ctx
 }
 
 // parseSchedule parses a simple schedule string into a duration.

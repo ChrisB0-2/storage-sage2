@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ChrisB0-2/storage-sage/internal/core"
+	"github.com/ChrisB0-2/storage-sage/internal/daemon"
 	"github.com/ChrisB0-2/storage-sage/internal/logger"
 	"github.com/ChrisB0-2/storage-sage/internal/metrics"
 	"github.com/ChrisB0-2/storage-sage/internal/trash"
@@ -170,10 +171,14 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 
 	// Gate 5: Perform deletion (fail-closed)
 	// If trash is enabled, move to trash instead of permanent delete
+	// Unless bypass_trash is set in context (disk critically full)
+	bypassTrash := daemon.BypassTrashFromContext(ctx)
+	useTrash := e.trash != nil && !bypassTrash
+
 	switch item.Candidate.Type {
 	case core.TargetFile:
-		// Try soft-delete first if trash is configured
-		if e.trash != nil {
+		// Try soft-delete first if trash is configured and not bypassed
+		if useTrash {
 			trashPath, err := e.trash.MoveToTrash(item.Candidate.Path)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
@@ -238,8 +243,8 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 			return nil
 		})
 
-		// Try soft-delete first if trash is configured
-		if e.trash != nil {
+		// Try soft-delete first if trash is configured and not bypassed
+		if useTrash {
 			trashPath, err := e.trash.MoveToTrash(item.Candidate.Path)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
@@ -262,7 +267,7 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 			return res
 		}
 
-		// Permanent delete
+		// Permanent delete (or trash bypassed due to critical disk usage)
 		if err := os.RemoveAll(item.Candidate.Path); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				res.Reason = reasonAlreadyGone

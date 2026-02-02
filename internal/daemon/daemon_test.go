@@ -2852,3 +2852,114 @@ func TestDaemon_RunWaitTimeout(t *testing.T) {
 		t.Errorf("shutdown too slow (%v), expected around 100ms", shutdownDuration)
 	}
 }
+
+func TestBypassTrashFromContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		expected bool
+	}{
+		{
+			name:     "no value in context",
+			ctx:      context.Background(),
+			expected: false,
+		},
+		{
+			name:     "bypass true",
+			ctx:      context.WithValue(context.Background(), ContextKeyBypassTrash, true),
+			expected: true,
+		},
+		{
+			name:     "bypass false",
+			ctx:      context.WithValue(context.Background(), ContextKeyBypassTrash, false),
+			expected: false,
+		},
+		{
+			name:     "wrong type in context",
+			ctx:      context.WithValue(context.Background(), ContextKeyBypassTrash, "true"),
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BypassTrashFromContext(tc.ctx)
+			if got != tc.expected {
+				t.Errorf("BypassTrashFromContext() = %v, want %v", got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCheckDiskAndPrepare_NoConfig(t *testing.T) {
+	d := New(logger.NewNop(), func(ctx context.Context) error { return nil }, Config{})
+
+	ctx := context.Background()
+	resultCtx := d.checkDiskAndPrepare(ctx)
+
+	// Should return same context when no config
+	if BypassTrashFromContext(resultCtx) {
+		t.Error("expected bypass trash to be false when no config")
+	}
+}
+
+func TestCheckDiskAndPrepare_NoScanRoots(t *testing.T) {
+	cfg := &config.Config{}
+	d := New(logger.NewNop(), func(ctx context.Context) error { return nil }, Config{
+		AppConfig: cfg,
+	})
+
+	ctx := context.Background()
+	resultCtx := d.checkDiskAndPrepare(ctx)
+
+	// Should return same context when no scan roots
+	if BypassTrashFromContext(resultCtx) {
+		t.Error("expected bypass trash to be false when no scan roots")
+	}
+}
+
+func TestCheckDiskAndPrepare_WithTrashCleanup(t *testing.T) {
+	// Create a temp directory for trash
+	tmpDir := t.TempDir()
+
+	// Create trash manager
+	trashMgr, err := trash.New(trash.Config{
+		TrashPath: tmpDir,
+		MaxAge:    time.Hour,
+	}, logger.NewNop())
+	if err != nil {
+		t.Fatalf("failed to create trash manager: %v", err)
+	}
+
+	// Create config with scan roots pointing to a real directory
+	cfg := &config.Config{}
+	cfg.Scan.Roots = []string{tmpDir}
+
+	d := New(logger.NewNop(), func(ctx context.Context) error { return nil }, Config{
+		AppConfig: cfg,
+		Trash:     trashMgr,
+	})
+
+	ctx := context.Background()
+	resultCtx := d.checkDiskAndPrepare(ctx)
+
+	// Disk usage is likely below 90%, so no bypass should be set
+	// This test mainly verifies the code path doesn't panic
+	_ = resultCtx
+}
+
+func TestDiskThresholds(t *testing.T) {
+	// Verify threshold constants are sensible
+	if DiskThresholdCleanupTrash >= DiskThresholdBypassTrash {
+		t.Errorf("cleanup threshold (%v) should be less than bypass threshold (%v)",
+			DiskThresholdCleanupTrash, DiskThresholdBypassTrash)
+	}
+
+	if DiskThresholdCleanupTrash < 50.0 || DiskThresholdCleanupTrash > 99.0 {
+		t.Errorf("cleanup threshold (%v) should be between 50 and 99", DiskThresholdCleanupTrash)
+	}
+
+	if DiskThresholdBypassTrash < 80.0 || DiskThresholdBypassTrash > 99.9 {
+		t.Errorf("bypass threshold (%v) should be between 80 and 99.9", DiskThresholdBypassTrash)
+	}
+}
