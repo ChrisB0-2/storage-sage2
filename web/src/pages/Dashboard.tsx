@@ -41,37 +41,26 @@ export default function Dashboard() {
 
       {/* Quick Stats */}
       <div>
-        <h3 className="text-lg font-medium text-gray-900 mb-4">Audit Summary</h3>
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Cleanup Summary</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {/* Total Records */}
+          {/* Files Processed (matches Grafana) */}
           <div className="card">
             <div className="flex flex-col">
               <span className="text-sm font-medium text-gray-500 uppercase">
-                Total Records
-              </span>
-              <span className="text-2xl font-bold text-gray-900">
-                {statsLoading ? (
-                  <span className="animate-pulse bg-gray-200 rounded h-8 w-20 block"></span>
-                ) : (
-                  stats?.TotalRecords?.toLocaleString() ?? '0'
-                )}
-              </span>
-            </div>
-          </div>
-
-          {/* Files Deleted */}
-          <div className="card">
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-gray-500 uppercase">
-                Files Deleted
+                Files Cleaned
               </span>
               <span className="text-2xl font-bold text-green-600">
                 {statsLoading ? (
                   <span className="animate-pulse bg-gray-200 rounded h-8 w-20 block"></span>
                 ) : (
-                  stats?.FilesDeleted?.toLocaleString() ?? '0'
+                  stats?.FilesProcessed?.toLocaleString() ?? '0'
                 )}
               </span>
+              {!statsLoading && stats && (stats.FilesDeleted > 0 || stats.FilesTrashed > 0) && (
+                <span className="text-xs text-gray-500 mt-1">
+                  {stats.FilesDeleted} deleted, {stats.FilesTrashed} trashed
+                </span>
+              )}
             </div>
           </div>
 
@@ -86,6 +75,22 @@ export default function Dashboard() {
                   <span className="animate-pulse bg-gray-200 rounded h-8 w-20 block"></span>
                 ) : (
                   formatBytes(stats?.TotalBytesFreed ?? 0)
+                )}
+              </span>
+            </div>
+          </div>
+
+          {/* Candidates Scanned */}
+          <div className="card">
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-gray-500 uppercase">
+                Candidates Scanned
+              </span>
+              <span className="text-2xl font-bold text-purple-600">
+                {statsLoading ? (
+                  <span className="animate-pulse bg-gray-200 rounded h-8 w-20 block"></span>
+                ) : (
+                  stats?.PlanEvents?.toLocaleString() ?? '0'
                 )}
               </span>
             </div>

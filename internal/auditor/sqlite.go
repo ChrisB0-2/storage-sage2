@@ -146,10 +146,18 @@ func (a *SQLiteAuditor) Record(ctx context.Context, evt core.AuditEvent) {
 		if v, ok := evt.Fields["mode"].(string); ok {
 			mode = v
 		}
-		if v, ok := evt.Fields["decision"].(string); ok {
-			decision = v
+		// Extract decision from policy_allow (boolean → "allow" / "deny")
+		if v, ok := evt.Fields["policy_allow"].(bool); ok {
+			if v {
+				decision = "allow"
+			} else {
+				decision = "deny"
+			}
 		}
-		if v, ok := evt.Fields["reason"].(string); ok {
+		// Extract reason: prefer result_reason (execute events), fall back to policy_reason (plan events)
+		if v, ok := evt.Fields["result_reason"].(string); ok && v != "" {
+			reason = v
+		} else if v, ok := evt.Fields["policy_reason"].(string); ok {
 			reason = v
 		}
 		if v, ok := evt.Fields["score"].(int); ok {
@@ -356,15 +364,33 @@ func (a *SQLiteAuditor) Stats(ctx context.Context) (*AuditStats, error) {
 		stats.LastRecord, _ = time.Parse(time.RFC3339Nano, lastTS.String)
 	}
 
-	// Total bytes freed (execute events with bytes_freed > 0 indicate actual deletions)
+	// Total bytes freed (from successful deletions/trashes)
 	var totalBytes sql.NullInt64
-	if err := a.db.QueryRowContext(ctx, "SELECT SUM(bytes_freed) FROM audit_log WHERE action = 'execute' AND bytes_freed > 0").Scan(&totalBytes); err != nil && err != sql.ErrNoRows {
+	if err := a.db.QueryRowContext(ctx, "SELECT SUM(bytes_freed) FROM audit_log WHERE action = 'execute' AND reason IN ('deleted', 'trashed')").Scan(&totalBytes); err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
 	stats.TotalBytesFreed = totalBytes.Int64
 
-	// Files deleted (count execute events where bytes were freed)
-	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'execute' AND bytes_freed > 0").Scan(&stats.FilesDeleted); err != nil {
+	// Files permanently deleted (reason = 'deleted')
+	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'execute' AND reason = 'deleted'").Scan(&stats.FilesDeleted); err != nil {
+		return nil, err
+	}
+
+	// Files moved to trash (reason = 'trashed')
+	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'execute' AND reason = 'trashed'").Scan(&stats.FilesTrashed); err != nil {
+		return nil, err
+	}
+
+	// Total successfully processed (deleted + trashed)
+	stats.FilesProcessed = stats.FilesDeleted + stats.FilesTrashed
+
+	// Plan events (candidates scanned)
+	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'plan'").Scan(&stats.PlanEvents); err != nil {
+		return nil, err
+	}
+
+	// Execute events (all execution attempts)
+	if err := a.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action = 'execute'").Scan(&stats.ExecuteEvents); err != nil {
 		return nil, err
 	}
 
@@ -382,7 +408,11 @@ type AuditStats struct {
 	FirstRecord     time.Time
 	LastRecord      time.Time
 	TotalBytesFreed int64
-	FilesDeleted    int64
+	FilesDeleted    int64 // Permanently deleted (reason = 'deleted')
+	FilesTrashed    int64 // Moved to trash (reason = 'trashed')
+	FilesProcessed  int64 // Total successful (deleted + trashed)
+	PlanEvents      int64 // Candidates scanned
+	ExecuteEvents   int64 // Execution attempts
 	Errors          int64
 }
 

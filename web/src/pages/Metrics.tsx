@@ -52,19 +52,26 @@ function MetricCard({ title, value, subtitle, color = 'text-gray-900' }: {
 
 function calculateRecentMetrics(records: AuditRecord[] | undefined): {
   filesDeleted: number;
+  filesTrashed: number;
+  filesProcessed: number;
   bytesFreed: number;
   errors: number;
   planEvents: number;
   executeEvents: number;
 } {
   if (!records) {
-    return { filesDeleted: 0, bytesFreed: 0, errors: 0, planEvents: 0, executeEvents: 0 };
+    return { filesDeleted: 0, filesTrashed: 0, filesProcessed: 0, bytesFreed: 0, errors: 0, planEvents: 0, executeEvents: 0 };
   }
 
   return records.reduce((acc, record) => {
-    if (record.action === 'execute' && record.bytes_freed && record.bytes_freed > 0) {
+    // Count successful deletions by reason (matches Grafana)
+    if (record.action === 'execute' && record.reason === 'deleted') {
       acc.filesDeleted++;
-      acc.bytesFreed += record.bytes_freed;
+      acc.bytesFreed += record.bytes_freed ?? 0;
+    }
+    if (record.action === 'execute' && record.reason === 'trashed') {
+      acc.filesTrashed++;
+      acc.bytesFreed += record.bytes_freed ?? 0;
     }
     if (record.level === 'error') {
       acc.errors++;
@@ -76,7 +83,14 @@ function calculateRecentMetrics(records: AuditRecord[] | undefined): {
       acc.executeEvents++;
     }
     return acc;
-  }, { filesDeleted: 0, bytesFreed: 0, errors: 0, planEvents: 0, executeEvents: 0 });
+  }, { filesDeleted: 0, filesTrashed: 0, filesProcessed: 0, bytesFreed: 0, errors: 0, planEvents: 0, executeEvents: 0 });
+}
+
+// Post-process to calculate filesProcessed
+function getRecentMetrics(records: AuditRecord[] | undefined) {
+  const metrics = calculateRecentMetrics(records);
+  metrics.filesProcessed = metrics.filesDeleted + metrics.filesTrashed;
+  return metrics;
 }
 
 function calculateLevelDistribution(records: AuditRecord[] | undefined) {
@@ -116,7 +130,7 @@ export default function Metrics() {
   );
 
   const isLoading = statsLoading || recordsLoading;
-  const recentMetrics = calculateRecentMetrics(recentRecords);
+  const recentMetrics = getRecentMetrics(recentRecords);
   const levelDistribution = calculateLevelDistribution(recentRecords);
   const actionDistribution = calculateActionDistribution(recentRecords);
 
@@ -151,19 +165,21 @@ export default function Metrics() {
         <h3 className="text-lg font-medium text-gray-900 mb-4">All-Time Statistics</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <MetricCard
-            title="Total Records"
-            value={isLoading ? '...' : (stats?.TotalRecords?.toLocaleString() ?? '0')}
-            subtitle="Audit log entries"
-          />
-          <MetricCard
-            title="Files Deleted"
-            value={isLoading ? '...' : (stats?.FilesDeleted?.toLocaleString() ?? '0')}
+            title="Files Cleaned"
+            value={isLoading ? '...' : (stats?.FilesProcessed?.toLocaleString() ?? '0')}
+            subtitle={!isLoading && stats ? `${stats.FilesDeleted} deleted, ${stats.FilesTrashed} trashed` : undefined}
             color="text-green-600"
           />
           <MetricCard
             title="Space Freed"
             value={isLoading ? '...' : formatBytes(stats?.TotalBytesFreed ?? 0)}
             color="text-blue-600"
+          />
+          <MetricCard
+            title="Candidates Scanned"
+            value={isLoading ? '...' : (stats?.PlanEvents?.toLocaleString() ?? '0')}
+            subtitle="Files evaluated"
+            color="text-purple-600"
           />
           <MetricCard
             title="Total Errors"
@@ -178,19 +194,21 @@ export default function Metrics() {
         <h3 className="text-lg font-medium text-gray-900 mb-4">Last 7 Days</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <MetricCard
-            title="Recent Events"
-            value={isLoading ? '...' : (recentRecords?.length ?? 0).toLocaleString()}
-            subtitle="Audit events"
-          />
-          <MetricCard
-            title="Files Deleted"
-            value={isLoading ? '...' : recentMetrics.filesDeleted.toLocaleString()}
+            title="Files Cleaned"
+            value={isLoading ? '...' : recentMetrics.filesProcessed.toLocaleString()}
+            subtitle={!isLoading ? `${recentMetrics.filesDeleted} deleted, ${recentMetrics.filesTrashed} trashed` : undefined}
             color="text-green-600"
           />
           <MetricCard
             title="Space Freed"
             value={isLoading ? '...' : formatBytes(recentMetrics.bytesFreed)}
             color="text-blue-600"
+          />
+          <MetricCard
+            title="Candidates Scanned"
+            value={isLoading ? '...' : recentMetrics.planEvents.toLocaleString()}
+            subtitle="Files evaluated"
+            color="text-purple-600"
           />
           <MetricCard
             title="Errors"
@@ -214,19 +232,23 @@ export default function Metrics() {
 
       {/* Activity Summary */}
       <div className="card">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">Activity Breakdown</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <h3 className="text-lg font-medium text-gray-900 mb-4">Activity Breakdown (7 days)</h3>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="text-center p-4 bg-purple-50 rounded-lg">
             <p className="text-3xl font-bold text-purple-600">{recentMetrics.planEvents}</p>
-            <p className="text-sm text-purple-800 mt-1">Plan Events</p>
+            <p className="text-sm text-purple-800 mt-1">Scanned</p>
+          </div>
+          <div className="text-center p-4 bg-gray-50 rounded-lg">
+            <p className="text-3xl font-bold text-gray-600">{recentMetrics.executeEvents}</p>
+            <p className="text-sm text-gray-800 mt-1">Attempted</p>
           </div>
           <div className="text-center p-4 bg-green-50 rounded-lg">
-            <p className="text-3xl font-bold text-green-600">{recentMetrics.executeEvents}</p>
-            <p className="text-sm text-green-800 mt-1">Execute Events</p>
+            <p className="text-3xl font-bold text-green-600">{recentMetrics.filesDeleted}</p>
+            <p className="text-sm text-green-800 mt-1">Deleted</p>
           </div>
           <div className="text-center p-4 bg-blue-50 rounded-lg">
-            <p className="text-3xl font-bold text-blue-600">{recentMetrics.filesDeleted}</p>
-            <p className="text-sm text-blue-800 mt-1">Files Deleted</p>
+            <p className="text-3xl font-bold text-blue-600">{recentMetrics.filesTrashed}</p>
+            <p className="text-sm text-blue-800 mt-1">Trashed</p>
           </div>
           <div className="text-center p-4 bg-red-50 rounded-lg">
             <p className="text-3xl font-bold text-red-600">{recentMetrics.errors}</p>

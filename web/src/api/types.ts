@@ -46,7 +46,11 @@ export interface AuditStats {
   FirstRecord: string;
   LastRecord: string;
   TotalBytesFreed: number;
-  FilesDeleted: number;
+  FilesDeleted: number;   // Permanently deleted
+  FilesTrashed: number;   // Moved to trash
+  FilesProcessed: number; // Total successful (deleted + trashed)
+  PlanEvents: number;     // Candidates scanned
+  ExecuteEvents: number;  // Execution attempts
   Errors: number;
 }
 

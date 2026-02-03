@@ -18,15 +18,35 @@ function formatBytes(bytes: number | undefined): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
-function getLevelBadge(level: string) {
-  switch (level) {
-    case 'error':
-      return 'bg-red-100 text-red-800';
-    case 'warn':
-      return 'bg-yellow-100 text-yellow-800';
-    case 'info':
+function getReasonBadge(reason: string | undefined): { classes: string; label: string; tooltip: string } {
+  if (!reason) {
+    return { classes: 'bg-gray-100 text-gray-800', label: '-', tooltip: 'No reason provided' };
+  }
+
+  // Handle compound reasons (e.g., "policy_deny:age_check")
+  const [baseReason, detail] = reason.includes(':') ? reason.split(':', 2) : [reason, ''];
+
+  switch (baseReason) {
+    case 'deleted':
+      return { classes: 'bg-green-100 text-green-800', label: 'Deleted', tooltip: 'File was permanently deleted' };
+    case 'trashed':
+      return { classes: 'bg-blue-100 text-blue-800', label: 'Trashed', tooltip: 'File was moved to trash' };
+    case 'would_delete':
+      return { classes: 'bg-purple-100 text-purple-800', label: 'Dry Run', tooltip: 'Would be deleted (dry-run mode)' };
+    case 'already_gone':
+      return { classes: 'bg-gray-100 text-gray-800', label: 'Already Gone', tooltip: 'File was already missing' };
+    case 'delete_failed':
+      return { classes: 'bg-red-100 text-red-800', label: 'Failed', tooltip: 'Deletion failed' };
+    case 'ctx_canceled':
+      return { classes: 'bg-gray-100 text-gray-800', label: 'Canceled', tooltip: 'Operation was canceled' };
+    case 'policy_deny':
+      return { classes: 'bg-yellow-100 text-yellow-800', label: 'Policy Denied', tooltip: `Blocked by policy: ${detail}` };
+    case 'safety_deny_scan':
+      return { classes: 'bg-orange-100 text-orange-800', label: 'Safety Denied', tooltip: `Blocked by safety scan: ${detail}` };
+    case 'safety_deny_execute':
+      return { classes: 'bg-orange-100 text-orange-800', label: 'Safety Denied', tooltip: `Blocked at execution: ${detail}` };
     default:
-      return 'bg-blue-100 text-blue-800';
+      return { classes: 'bg-gray-100 text-gray-800', label: reason, tooltip: reason };
   }
 }
 
@@ -80,45 +100,42 @@ export default function HistoryTable({ records, isLoading }: HistoryTableProps) 
           <thead className="bg-gray-50">
             <tr>
               <th scope="col" className="table-header">Timestamp</th>
-              <th scope="col" className="table-header">Level</th>
               <th scope="col" className="table-header">Action</th>
               <th scope="col" className="table-header">Path</th>
-              <th scope="col" className="table-header">Decision</th>
+              <th scope="col" className="table-header">Reason</th>
               <th scope="col" className="table-header">Bytes Freed</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {records.map((record) => (
-              <tr key={record.id} className="hover:bg-gray-50">
-                <td className="table-cell text-gray-500">
-                  {formatTimestamp(record.timestamp)}
-                </td>
-                <td className="table-cell">
-                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getLevelBadge(record.level)}`}>
-                    {record.level}
-                  </span>
-                </td>
-                <td className="table-cell">
-                  <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getActionBadge(record.action)}`}>
-                    {record.action}
-                  </span>
-                </td>
-                <td className="table-cell font-mono text-xs max-w-xs truncate" title={record.path}>
-                  {record.path || '-'}
-                </td>
-                <td className="table-cell">
-                  {record.decision || '-'}
-                  {record.reason && (
-                    <span className="block text-xs text-gray-500 truncate max-w-xs" title={record.reason}>
-                      {record.reason}
+            {records.map((record) => {
+              const reasonInfo = getReasonBadge(record.reason);
+              return (
+                <tr key={record.id} className="hover:bg-gray-50">
+                  <td className="table-cell text-gray-500">
+                    {formatTimestamp(record.timestamp)}
+                  </td>
+                  <td className="table-cell">
+                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getActionBadge(record.action)}`}>
+                      {record.action}
                     </span>
-                  )}
-                </td>
-                <td className="table-cell text-right">
-                  {formatBytes(record.bytes_freed)}
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="table-cell font-mono text-xs max-w-xs truncate" title={record.path}>
+                    {record.path || '-'}
+                  </td>
+                  <td className="table-cell">
+                    <span
+                      className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${reasonInfo.classes}`}
+                      title={reasonInfo.tooltip}
+                    >
+                      {reasonInfo.label}
+                    </span>
+                  </td>
+                  <td className="table-cell text-right">
+                    {formatBytes(record.bytes_freed)}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
