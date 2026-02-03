@@ -57,6 +57,25 @@ storage-sage --help
 
 See [INSTALL.md](INSTALL.md) for all supported install options.
 
+### Docker / Podman (Recommended for Demo)
+
+```bash
+git clone https://github.com/ChrisB0-2/storage-sage.git
+cd storage-sage
+mkdir -p data trash
+docker compose up -d
+
+# Verify it's running
+curl http://localhost:8080/health
+
+# Run smoke test
+./smoke-test.sh
+```
+
+Open http://localhost:8080 for the web dashboard.
+
+See [docs/DOCKER_QUICKSTART.md](docs/DOCKER_QUICKSTART.md) for complete Docker setup and troubleshooting.
+
 ## Quick Start
 
 ### First-time setup (recommended)
