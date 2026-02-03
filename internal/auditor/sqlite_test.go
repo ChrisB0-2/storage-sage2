@@ -166,12 +166,17 @@ func TestSQLiteAuditor_Stats(t *testing.T) {
 	}
 	defer aud.Close()
 
-	// Record events (action="execute" with bytes_freed > 0 counts as deleted)
+	// Record events with proper reason fields for stats tracking
+	// - FilesDeleted: action="execute" AND reason="deleted"
+	// - FilesTrashed: action="execute" AND reason="trashed"
+	// - PlanEvents: action="plan"
+	// - ExecuteEvents: action="execute" (all)
 	events := []core.AuditEvent{
-		{Time: time.Now(), Level: "info", Action: "execute", Fields: map[string]any{"bytes_freed": int64(1024)}},
-		{Time: time.Now(), Level: "info", Action: "execute", Fields: map[string]any{"bytes_freed": int64(2048)}},
-		{Time: time.Now(), Level: "info", Action: "plan"}, // plan events don't count as deleted
-		{Time: time.Now(), Level: "error", Action: "execute"},
+		{Time: time.Now(), Level: "info", Action: "execute", Fields: map[string]any{"result_reason": "deleted", "bytes_freed": int64(1024)}},
+		{Time: time.Now(), Level: "info", Action: "execute", Fields: map[string]any{"result_reason": "trashed", "bytes_freed": int64(2048)}},
+		{Time: time.Now(), Level: "info", Action: "plan", Fields: map[string]any{"policy_reason": "age_ok"}},
+		{Time: time.Now(), Level: "info", Action: "plan", Fields: map[string]any{"policy_reason": "too_new"}},
+		{Time: time.Now(), Level: "error", Action: "execute", Fields: map[string]any{"result_reason": "delete_failed"}},
 	}
 	for _, evt := range events {
 		aud.Record(context.Background(), evt)
@@ -182,11 +187,23 @@ func TestSQLiteAuditor_Stats(t *testing.T) {
 		t.Fatalf("stats failed: %v", err)
 	}
 
-	if stats.TotalRecords != 4 {
-		t.Errorf("expected 4 total records, got %d", stats.TotalRecords)
+	if stats.TotalRecords != 5 {
+		t.Errorf("expected 5 total records, got %d", stats.TotalRecords)
 	}
-	if stats.FilesDeleted != 2 {
-		t.Errorf("expected 2 deleted (execute with bytes_freed > 0), got %d", stats.FilesDeleted)
+	if stats.FilesDeleted != 1 {
+		t.Errorf("expected 1 deleted (reason='deleted'), got %d", stats.FilesDeleted)
+	}
+	if stats.FilesTrashed != 1 {
+		t.Errorf("expected 1 trashed (reason='trashed'), got %d", stats.FilesTrashed)
+	}
+	if stats.FilesProcessed != 2 {
+		t.Errorf("expected 2 processed (deleted + trashed), got %d", stats.FilesProcessed)
+	}
+	if stats.PlanEvents != 2 {
+		t.Errorf("expected 2 plan events, got %d", stats.PlanEvents)
+	}
+	if stats.ExecuteEvents != 3 {
+		t.Errorf("expected 3 execute events, got %d", stats.ExecuteEvents)
 	}
 	if stats.Errors != 1 {
 		t.Errorf("expected 1 error, got %d", stats.Errors)
