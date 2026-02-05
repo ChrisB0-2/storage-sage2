@@ -193,8 +193,8 @@ func Default() *Config {
 		},
 		Daemon: DaemonConfig{
 			Enabled:                   false,
-			HTTPAddr:                  ":8080",
-			MetricsAddr:               ":9090",
+			HTTPAddr:                  "127.0.0.1:8080", // Localhost only by default for security
+			MetricsAddr:               "127.0.0.1:9090", // Localhost only by default for security
 			Schedule:                  "",
 			TriggerTimeout:            30 * time.Minute,
 			PIDFile:                   "",   // Empty = no PID file

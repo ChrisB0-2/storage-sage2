@@ -54,7 +54,7 @@ var (
 	// Daemon mode flags
 	daemonMode = flag.Bool("daemon", false, "run as long-running daemon")
 	schedule   = flag.String("schedule", "", "run schedule (e.g., '1h', '30m', '@every 6h')")
-	daemonAddr = flag.String("daemon-addr", ":8080", "daemon health endpoint address")
+	daemonAddr = flag.String("daemon-addr", "127.0.0.1:8080", "daemon HTTP address (use 0.0.0.0:8080 for external access)")
 	pidFile    = flag.String("pid-file", "", "PID file path for single-instance enforcement")
 
 	// Soft-delete flags

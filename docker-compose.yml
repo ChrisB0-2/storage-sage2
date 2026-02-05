@@ -22,6 +22,9 @@ services:
       - "-loki-url=http://loki:3100"
       - "-audit-db=/var/lib/storage-sage/audit.db"
       - "-trash-path=/var/lib/storage-sage/trash"
+      # Bind to all interfaces for container access (default is localhost-only)
+      # Consider enabling auth (-auth -auth-key) for production deployments
+      - "-daemon-addr=0.0.0.0:8080"
     volumes:
       # Mount the directory to clean
       - ./data:/data:rw,z

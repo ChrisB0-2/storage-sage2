@@ -95,7 +95,10 @@ logging:
 # =============================================================================
 daemon:
   enabled: true
-  http_addr: ":8080"
+  # SECURITY: Binds to localhost only by default. The /trigger endpoint can
+  # start cleanup runs, so external access requires explicit opt-in.
+  # Use "0.0.0.0:8080" for external/container access (enable auth first!)
+  http_addr: "127.0.0.1:8080"
   schedule: "6h"
   trigger_timeout: 30m
 
