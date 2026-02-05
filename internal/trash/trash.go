@@ -266,10 +266,18 @@ func (m *Manager) List() ([]TrashItem, error) {
 			continue
 		}
 
+		// Calculate actual size (for directories, walk contents)
+		var size int64
+		if entry.IsDir() {
+			size = calcDirSize(path)
+		} else {
+			size = info.Size()
+		}
+
 		item := TrashItem{
 			TrashPath: path,
 			Name:      entry.Name(),
-			Size:      info.Size(),
+			Size:      size,
 			TrashedAt: info.ModTime(),
 			IsDir:     entry.IsDir(),
 		}
@@ -288,6 +296,20 @@ func (m *Manager) List() ([]TrashItem, error) {
 	}
 
 	return items, nil
+}
+
+// calcDirSize calculates the total size of all files in a directory.
+func calcDirSize(path string) int64 {
+	var size int64
+	_ = filepath.WalkDir(path, func(_ string, d fs.DirEntry, _ error) error {
+		if !d.IsDir() {
+			if info, err := d.Info(); err == nil {
+				size += info.Size()
+			}
+		}
+		return nil
+	})
+	return size
 }
 
 // TrashItem represents an item in the trash.

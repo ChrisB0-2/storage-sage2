@@ -727,6 +727,49 @@ func TestList(t *testing.T) {
 			t.Error("item should be marked as directory")
 		}
 	})
+
+	t.Run("directory size is actual content size not 4096", func(t *testing.T) {
+		trashPath := t.TempDir()
+		srcDir := t.TempDir()
+
+		m, err := New(Config{TrashPath: trashPath}, nil)
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
+
+		// Create a directory with known content sizes
+		testDir := filepath.Join(srcDir, "sizetest")
+		if err := os.MkdirAll(testDir, 0755); err != nil {
+			t.Fatalf("failed to create dir: %v", err)
+		}
+		// Create two files with known sizes (100 bytes each)
+		content := make([]byte, 100)
+		if err := os.WriteFile(filepath.Join(testDir, "file1.txt"), content, 0644); err != nil {
+			t.Fatalf("failed to create file1: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(testDir, "file2.txt"), content, 0644); err != nil {
+			t.Fatalf("failed to create file2: %v", err)
+		}
+
+		if _, err := m.MoveToTrash(testDir); err != nil {
+			t.Fatalf("MoveToTrash failed: %v", err)
+		}
+
+		items, err := m.List()
+		if err != nil {
+			t.Fatalf("List failed: %v", err)
+		}
+
+		if len(items) != 1 {
+			t.Fatalf("len(items) = %d, want 1", len(items))
+		}
+
+		// Size should be 200 bytes (2 files * 100 bytes), NOT 4096 (directory inode size)
+		expectedSize := int64(200)
+		if items[0].Size != expectedSize {
+			t.Errorf("directory Size = %d, want %d (actual content size)", items[0].Size, expectedSize)
+		}
+	})
 }
 
 func TestHashPath(t *testing.T) {

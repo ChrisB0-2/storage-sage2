@@ -336,6 +336,33 @@ func ValidateDaemon(d DaemonConfig) []ValidationError {
 		}
 	}
 
+	// Validate disk threshold for trash cleanup (must be 0-100%)
+	if d.DiskThresholdCleanupTrash < 0 || d.DiskThresholdCleanupTrash > 100 {
+		errs = append(errs, ValidationError{
+			Field:   "daemon.disk_threshold_cleanup_trash",
+			Message: fmt.Sprintf("must be between 0 and 100, got %.1f", d.DiskThresholdCleanupTrash),
+		})
+	}
+
+	// Validate disk threshold for bypass trash (must be 0-100%)
+	if d.DiskThresholdBypassTrash < 0 || d.DiskThresholdBypassTrash > 100 {
+		errs = append(errs, ValidationError{
+			Field:   "daemon.disk_threshold_bypass_trash",
+			Message: fmt.Sprintf("must be between 0 and 100, got %.1f", d.DiskThresholdBypassTrash),
+		})
+	}
+
+	// Bypass threshold must be greater than cleanup threshold
+	// (cleanup happens first at lower usage, bypass is for emergencies)
+	if d.DiskThresholdBypassTrash > 0 && d.DiskThresholdCleanupTrash > 0 &&
+		d.DiskThresholdBypassTrash <= d.DiskThresholdCleanupTrash {
+		errs = append(errs, ValidationError{
+			Field: "daemon.disk_threshold_bypass_trash",
+			Message: fmt.Sprintf("must be greater than disk_threshold_cleanup_trash (%.1f <= %.1f)",
+				d.DiskThresholdBypassTrash, d.DiskThresholdCleanupTrash),
+		})
+	}
+
 	return errs
 }
 

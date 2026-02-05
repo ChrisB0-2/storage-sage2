@@ -479,3 +479,108 @@ func TestParseSchedule_Invalid(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateDaemon_DiskThresholdCleanupTrashInvalid(t *testing.T) {
+	tests := []struct {
+		name      string
+		threshold float64
+		wantErr   bool
+	}{
+		{"negative", -1, true},
+		{"zero", 0, false},
+		{"valid_50", 50, false},
+		{"valid_100", 100, false},
+		{"over_100", 101, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := DaemonConfig{
+				DiskThresholdCleanupTrash: tc.threshold,
+				DiskThresholdBypassTrash:  99, // Valid value > cleanup
+			}
+			if tc.threshold >= 99 {
+				d.DiskThresholdBypassTrash = 100 // Ensure bypass > cleanup
+			}
+			errs := ValidateDaemon(d)
+			hasErr := false
+			for _, e := range errs {
+				if e.Field == "daemon.disk_threshold_cleanup_trash" {
+					hasErr = true
+					break
+				}
+			}
+			if hasErr != tc.wantErr {
+				t.Errorf("threshold %.1f: hasErr=%v, wantErr=%v", tc.threshold, hasErr, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateDaemon_DiskThresholdBypassTrashInvalid(t *testing.T) {
+	tests := []struct {
+		name      string
+		threshold float64
+		wantErr   bool
+	}{
+		{"negative", -1, true},
+		{"zero", 0, false},
+		{"valid_50", 50, false},
+		{"valid_100", 100, false},
+		{"over_100", 101, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := DaemonConfig{
+				DiskThresholdCleanupTrash: 0, // Zero disables comparison check
+				DiskThresholdBypassTrash:  tc.threshold,
+			}
+			errs := ValidateDaemon(d)
+			hasErr := false
+			for _, e := range errs {
+				if e.Field == "daemon.disk_threshold_bypass_trash" && strings.Contains(e.Message, "between 0 and 100") {
+					hasErr = true
+					break
+				}
+			}
+			if hasErr != tc.wantErr {
+				t.Errorf("threshold %.1f: hasErr=%v, wantErr=%v", tc.threshold, hasErr, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateDaemon_DiskThresholdBypassMustBeGreaterThanCleanup(t *testing.T) {
+	tests := []struct {
+		name    string
+		cleanup float64
+		bypass  float64
+		wantErr bool
+	}{
+		{"bypass_greater", 80, 90, false},
+		{"bypass_equal", 80, 80, true},
+		{"bypass_less", 90, 80, true},
+		{"both_zero_ok", 0, 0, false},     // Zero disables check
+		{"cleanup_zero_ok", 0, 90, false}, // Zero cleanup disables check
+		{"bypass_zero_ok", 90, 0, false},  // Zero bypass disables check
+		{"valid_defaults", 90, 95, false}, // Default values
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := DaemonConfig{
+				DiskThresholdCleanupTrash: tc.cleanup,
+				DiskThresholdBypassTrash:  tc.bypass,
+			}
+			errs := ValidateDaemon(d)
+			hasErr := false
+			for _, e := range errs {
+				if e.Field == "daemon.disk_threshold_bypass_trash" && strings.Contains(e.Message, "must be greater than") {
+					hasErr = true
+					break
+				}
+			}
+			if hasErr != tc.wantErr {
+				t.Errorf("cleanup=%.1f bypass=%.1f: hasErr=%v, wantErr=%v", tc.cleanup, tc.bypass, hasErr, tc.wantErr)
+			}
+		})
+	}
+}
