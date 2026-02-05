@@ -172,8 +172,8 @@ func Default() *Config {
 			Timeout:            30 * time.Second,
 			AuditPath:          "",
 			MaxItems:           25,
-			MaxDeletionsPerRun: 10000,             // Safety limit: stop after 10k deletions per run
-			TrashPath:          "",                // Empty = permanent delete (no soft-delete)
+			MaxDeletionsPerRun: 10000,              // Safety limit: stop after 10k deletions per run
+			TrashPath:          "",                 // Empty = permanent delete (no soft-delete)
 			TrashMaxAge:        7 * 24 * time.Hour, // 7 days default if trash is enabled
 		},
 		Logging: LoggingConfig{
