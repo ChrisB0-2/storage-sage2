@@ -37,12 +37,13 @@ const (
 	StateStopped
 )
 
-// Disk usage thresholds for auto-cleanup behavior.
+// Default disk usage thresholds for auto-cleanup behavior.
+// These are used when config values are not provided (zero).
 const (
-	// DiskThresholdCleanupTrash triggers trash cleanup before the main run.
-	DiskThresholdCleanupTrash = 90.0
-	// DiskThresholdBypassTrash triggers permanent deletion (bypass trash entirely).
-	DiskThresholdBypassTrash = 95.0
+	// DefaultDiskThresholdCleanupTrash triggers trash cleanup before the main run.
+	DefaultDiskThresholdCleanupTrash = 90.0
+	// DefaultDiskThresholdBypassTrash triggers permanent deletion (bypass trash entirely).
+	DefaultDiskThresholdBypassTrash = 95.0
 )
 
 // contextKey is used for context values in this package.
@@ -100,6 +101,10 @@ type Daemon struct {
 	pidFilePath    string
 	runWaitTimeout time.Duration // timeout for waiting on in-flight runs during shutdown
 
+	// Disk usage thresholds (configurable)
+	diskThresholdCleanupTrash float64 // % usage to trigger pre-run trash cleanup
+	diskThresholdBypassTrash  float64 // % usage to bypass trash entirely
+
 	// Optional references for API endpoints
 	cfg     *config.Config
 	auditor *auditor.SQLiteAuditor
@@ -135,6 +140,10 @@ type Config struct {
 	PIDFile        string        // Path to PID file for single-instance enforcement
 	RunWaitTimeout time.Duration // Timeout for waiting on in-flight runs during shutdown (default: 10s)
 
+	// Disk usage thresholds (0 = use defaults)
+	DiskThresholdCleanupTrash float64 // % usage to trigger pre-run trash cleanup (default: 90)
+	DiskThresholdBypassTrash  float64 // % usage to bypass trash entirely (default: 95)
+
 	// Optional: references for API endpoints
 	AppConfig *config.Config         // Application config to expose via /api/config
 	Auditor   *auditor.SQLiteAuditor // Auditor for /api/audit/* endpoints
@@ -160,21 +169,33 @@ func New(log logger.Logger, runFunc RunFunc, cfg Config) *Daemon {
 		cfg.RunWaitTimeout = 10 * time.Second
 	}
 
+	// Apply defaults for disk thresholds if not set
+	diskThresholdCleanupTrash := cfg.DiskThresholdCleanupTrash
+	if diskThresholdCleanupTrash <= 0 {
+		diskThresholdCleanupTrash = DefaultDiskThresholdCleanupTrash
+	}
+	diskThresholdBypassTrash := cfg.DiskThresholdBypassTrash
+	if diskThresholdBypassTrash <= 0 {
+		diskThresholdBypassTrash = DefaultDiskThresholdBypassTrash
+	}
+
 	d := &Daemon{
-		log:              log,
-		runFunc:          runFunc,
-		schedule:         cfg.Schedule,
-		httpAddr:         cfg.HTTPAddr,
-		triggerTimeout:   cfg.TriggerTimeout,
-		runWaitTimeout:   cfg.RunWaitTimeout,
-		pidFilePath:      cfg.PIDFile,
-		cfg:              cfg.AppConfig,
-		auditor:          cfg.Auditor,
-		trash:            cfg.Trash,
-		authMiddleware:   cfg.AuthMiddleware,
-		rbacMiddleware:   cfg.RBACMiddleware,
-		stopCh:           make(chan struct{}),
-		schedulerPauseCh: make(chan struct{}, 1),
+		log:                       log,
+		runFunc:                   runFunc,
+		schedule:                  cfg.Schedule,
+		httpAddr:                  cfg.HTTPAddr,
+		triggerTimeout:            cfg.TriggerTimeout,
+		runWaitTimeout:            cfg.RunWaitTimeout,
+		pidFilePath:               cfg.PIDFile,
+		diskThresholdCleanupTrash: diskThresholdCleanupTrash,
+		diskThresholdBypassTrash:  diskThresholdBypassTrash,
+		cfg:                       cfg.AppConfig,
+		auditor:                   cfg.Auditor,
+		trash:                     cfg.Trash,
+		authMiddleware:            cfg.AuthMiddleware,
+		rbacMiddleware:            cfg.RBACMiddleware,
+		stopCh:                    make(chan struct{}),
+		schedulerPauseCh:          make(chan struct{}, 1),
 	}
 	d.state.Store(int32(StateStarting))
 	d.schedulerEnabled.Store(true) // scheduler enabled by default
@@ -554,19 +575,19 @@ func (d *Daemon) checkDiskAndPrepare(ctx context.Context) context.Context {
 		logger.F("path", maxPath))
 
 	// Critical: bypass trash entirely if disk is nearly full
-	if maxUsage > DiskThresholdBypassTrash {
+	if maxUsage > d.diskThresholdBypassTrash {
 		d.log.Warn("disk critically full, bypassing trash for this run",
 			logger.F("usage_percent", fmt.Sprintf("%.1f", maxUsage)),
-			logger.F("threshold", fmt.Sprintf("%.1f", DiskThresholdBypassTrash)),
+			logger.F("threshold", fmt.Sprintf("%.1f", d.diskThresholdBypassTrash)),
 			logger.F("path", maxPath))
 		return context.WithValue(ctx, ContextKeyBypassTrash, true)
 	}
 
 	// High usage: cleanup trash first to free space
-	if maxUsage > DiskThresholdCleanupTrash && d.trash != nil {
+	if maxUsage > d.diskThresholdCleanupTrash && d.trash != nil {
 		d.log.Info("disk usage high, running trash cleanup first",
 			logger.F("usage_percent", fmt.Sprintf("%.1f", maxUsage)),
-			logger.F("threshold", fmt.Sprintf("%.1f", DiskThresholdCleanupTrash)),
+			logger.F("threshold", fmt.Sprintf("%.1f", d.diskThresholdCleanupTrash)),
 			logger.F("path", maxPath))
 
 		count, bytesFreed, err := d.trash.Cleanup(ctx)

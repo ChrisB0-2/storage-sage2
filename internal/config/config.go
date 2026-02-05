@@ -90,6 +90,10 @@ type DaemonConfig struct {
 	Schedule       string        `yaml:"schedule" json:"schedule"`               // cron expression
 	TriggerTimeout time.Duration `yaml:"trigger_timeout" json:"trigger_timeout"` // timeout for manual /trigger requests
 	PIDFile        string        `yaml:"pid_file" json:"pid_file"`               // PID file path for single-instance enforcement
+
+	// Disk usage thresholds for auto-cleanup behavior
+	DiskThresholdCleanupTrash float64 `yaml:"disk_threshold_cleanup_trash" json:"disk_threshold_cleanup_trash"` // % usage to trigger pre-run trash cleanup (default: 90)
+	DiskThresholdBypassTrash  float64 `yaml:"disk_threshold_bypass_trash" json:"disk_threshold_bypass_trash"`   // % usage to bypass trash entirely (default: 95)
 }
 
 // MetricsConfig configures Prometheus metrics.
@@ -186,12 +190,14 @@ func Default() *Config {
 			},
 		},
 		Daemon: DaemonConfig{
-			Enabled:        false,
-			HTTPAddr:       ":8080",
-			MetricsAddr:    ":9090",
-			Schedule:       "",
-			TriggerTimeout: 30 * time.Minute,
-			PIDFile:        "", // Empty = no PID file
+			Enabled:                   false,
+			HTTPAddr:                  ":8080",
+			MetricsAddr:               ":9090",
+			Schedule:                  "",
+			TriggerTimeout:            30 * time.Minute,
+			PIDFile:                   "",   // Empty = no PID file
+			DiskThresholdCleanupTrash: 90.0, // Trigger trash cleanup at 90% disk usage
+			DiskThresholdBypassTrash:  95.0, // Bypass trash entirely at 95% disk usage
 		},
 		Metrics: MetricsConfig{
 			Enabled:   false,
