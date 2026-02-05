@@ -963,9 +963,15 @@ func TestCopyDirAndDelete(t *testing.T) {
 		dstTree := filepath.Join(dstDir, "tree")
 
 		// Create a directory tree
-		os.MkdirAll(filepath.Join(srcTree, "subdir"), 0755)
-		os.WriteFile(filepath.Join(srcTree, "file1.txt"), []byte("file1"), 0644)
-		os.WriteFile(filepath.Join(srcTree, "subdir", "file2.txt"), []byte("file2"), 0644)
+		if err := os.MkdirAll(filepath.Join(srcTree, "subdir"), 0755); err != nil {
+			t.Fatalf("failed to create subdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(srcTree, "file1.txt"), []byte("file1"), 0644); err != nil {
+			t.Fatalf("failed to write file1: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(srcTree, "subdir", "file2.txt"), []byte("file2"), 0644); err != nil {
+			t.Fatalf("failed to write file2: %v", err)
+		}
 
 		if err := copyDirAndDelete(srcTree, dstTree); err != nil {
 			t.Fatalf("copyDirAndDelete failed: %v", err)
