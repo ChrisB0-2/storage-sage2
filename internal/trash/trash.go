@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -314,16 +315,51 @@ func copyAndDelete(src, dst string, info os.FileInfo) error {
 	return copyFileAndDelete(src, dst, info.Mode())
 }
 
+// copyFileAndDelete copies a file using streaming I/O to avoid loading
+// the entire file into memory. This prevents OOM when moving large files
+// across filesystems under disk pressure.
 func copyFileAndDelete(src, dst string, mode os.FileMode) error {
-	data, err := os.ReadFile(src)
+	// Open source file
+	srcFile, err := os.Open(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer srcFile.Close()
+
+	// Write to temp file first for atomicity
+	dstTmp := dst + ".tmp"
+	dstFile, err := os.OpenFile(dstTmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return fmt.Errorf("create temp dest: %w", err)
 	}
 
-	if err := os.WriteFile(dst, data, mode); err != nil {
-		return err
+	// Stream copy with default 32KB buffer (io.Copy handles this)
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		dstFile.Close()
+		os.Remove(dstTmp)
+		return fmt.Errorf("copy data: %w", err)
 	}
 
+	// Sync to disk for durability
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		os.Remove(dstTmp)
+		return fmt.Errorf("sync: %w", err)
+	}
+
+	if err := dstFile.Close(); err != nil {
+		os.Remove(dstTmp)
+		return fmt.Errorf("close dest: %w", err)
+	}
+
+	// Atomic rename temp to final destination
+	if err := os.Rename(dstTmp, dst); err != nil {
+		os.Remove(dstTmp)
+		return fmt.Errorf("rename temp: %w", err)
+	}
+
+	// Only remove source after successful copy
 	return os.Remove(src)
 }
 
@@ -353,12 +389,8 @@ func copyDirAndDelete(src, dst string) error {
 			return err
 		}
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		return os.WriteFile(dstPath, data, info.Mode())
+		// Use streaming copy to avoid OOM on large files
+		return copyFileStreaming(path, dstPath, info.Mode())
 	})
 
 	if err != nil {
@@ -366,4 +398,34 @@ func copyDirAndDelete(src, dst string) error {
 	}
 
 	return os.RemoveAll(src)
+}
+
+// copyFileStreaming copies a single file using streaming I/O.
+// Does not delete the source (used by copyDirAndDelete which does bulk removal).
+func copyFileStreaming(src, dst string, mode os.FileMode) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return fmt.Errorf("create dest: %w", err)
+	}
+
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		dstFile.Close()
+		os.Remove(dst)
+		return fmt.Errorf("copy data: %w", err)
+	}
+
+	if err := dstFile.Sync(); err != nil {
+		dstFile.Close()
+		os.Remove(dst)
+		return fmt.Errorf("sync: %w", err)
+	}
+
+	return dstFile.Close()
 }

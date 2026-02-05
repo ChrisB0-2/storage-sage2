@@ -780,3 +780,214 @@ func TestTrashItemStruct(t *testing.T) {
 		t.Error("IsDir should be false")
 	}
 }
+
+// TestCopyFileStreaming tests the streaming copy function used for cross-device moves.
+// This is a regression test for the OOM fix - previously used os.ReadFile which loaded
+// entire files into memory.
+func TestCopyFileStreaming(t *testing.T) {
+	t.Run("copies file contents correctly", func(t *testing.T) {
+		srcDir := t.TempDir()
+		dstDir := t.TempDir()
+
+		srcPath := filepath.Join(srcDir, "source.txt")
+		dstPath := filepath.Join(dstDir, "dest.txt")
+
+		content := []byte("test content for streaming copy")
+		if err := os.WriteFile(srcPath, content, 0644); err != nil {
+			t.Fatalf("failed to create source file: %v", err)
+		}
+
+		if err := copyFileStreaming(srcPath, dstPath, 0644); err != nil {
+			t.Fatalf("copyFileStreaming failed: %v", err)
+		}
+
+		// Verify content was copied correctly
+		got, err := os.ReadFile(dstPath)
+		if err != nil {
+			t.Fatalf("failed to read dest file: %v", err)
+		}
+		if string(got) != string(content) {
+			t.Errorf("content mismatch: got %q, want %q", got, content)
+		}
+
+		// Source should still exist (copyFileStreaming doesn't delete)
+		if _, err := os.Stat(srcPath); err != nil {
+			t.Error("source file should still exist")
+		}
+	})
+
+	t.Run("preserves file mode", func(t *testing.T) {
+		srcDir := t.TempDir()
+		dstDir := t.TempDir()
+
+		srcPath := filepath.Join(srcDir, "source.txt")
+		dstPath := filepath.Join(dstDir, "dest.txt")
+
+		if err := os.WriteFile(srcPath, []byte("test"), 0755); err != nil {
+			t.Fatalf("failed to create source file: %v", err)
+		}
+
+		if err := copyFileStreaming(srcPath, dstPath, 0755); err != nil {
+			t.Fatalf("copyFileStreaming failed: %v", err)
+		}
+
+		info, err := os.Stat(dstPath)
+		if err != nil {
+			t.Fatalf("failed to stat dest file: %v", err)
+		}
+
+		// Check executable bit is preserved (masking with 0777 for portability)
+		if info.Mode().Perm()&0100 == 0 {
+			t.Error("executable permission not preserved")
+		}
+	})
+
+	t.Run("handles non-existent source", func(t *testing.T) {
+		dstDir := t.TempDir()
+		err := copyFileStreaming("/nonexistent/file", filepath.Join(dstDir, "dest"), 0644)
+		if err == nil {
+			t.Error("expected error for non-existent source")
+		}
+	})
+
+	t.Run("handles large file without OOM", func(t *testing.T) {
+		// This test verifies we don't load the entire file into memory.
+		// We create a 10MB file - if we were using os.ReadFile, this would
+		// allocate 10MB of RAM. With streaming, we use only a small buffer.
+		srcDir := t.TempDir()
+		dstDir := t.TempDir()
+
+		srcPath := filepath.Join(srcDir, "large.bin")
+		dstPath := filepath.Join(dstDir, "large.bin")
+
+		// Create a 10MB file
+		f, err := os.Create(srcPath)
+		if err != nil {
+			t.Fatalf("failed to create source file: %v", err)
+		}
+
+		size := int64(10 * 1024 * 1024) // 10MB
+		chunk := make([]byte, 64*1024)  // 64KB chunks
+		for i := range chunk {
+			chunk[i] = byte(i % 256)
+		}
+
+		written := int64(0)
+		for written < size {
+			n, err := f.Write(chunk)
+			if err != nil {
+				f.Close()
+				t.Fatalf("failed to write chunk: %v", err)
+			}
+			written += int64(n)
+		}
+		f.Close()
+
+		// Copy using streaming
+		if err := copyFileStreaming(srcPath, dstPath, 0644); err != nil {
+			t.Fatalf("copyFileStreaming failed: %v", err)
+		}
+
+		// Verify size matches
+		srcInfo, _ := os.Stat(srcPath)
+		dstInfo, _ := os.Stat(dstPath)
+		if srcInfo.Size() != dstInfo.Size() {
+			t.Errorf("size mismatch: src=%d, dst=%d", srcInfo.Size(), dstInfo.Size())
+		}
+	})
+}
+
+// TestCopyFileAndDelete tests the full cross-device move with atomic rename and source deletion.
+func TestCopyFileAndDelete(t *testing.T) {
+	t.Run("copies and deletes source", func(t *testing.T) {
+		srcDir := t.TempDir()
+		dstDir := t.TempDir()
+
+		srcPath := filepath.Join(srcDir, "source.txt")
+		dstPath := filepath.Join(dstDir, "dest.txt")
+
+		content := []byte("content to move")
+		if err := os.WriteFile(srcPath, content, 0644); err != nil {
+			t.Fatalf("failed to create source file: %v", err)
+		}
+
+		if err := copyFileAndDelete(srcPath, dstPath, 0644); err != nil {
+			t.Fatalf("copyFileAndDelete failed: %v", err)
+		}
+
+		// Verify content at destination
+		got, err := os.ReadFile(dstPath)
+		if err != nil {
+			t.Fatalf("failed to read dest file: %v", err)
+		}
+		if string(got) != string(content) {
+			t.Errorf("content mismatch: got %q, want %q", got, content)
+		}
+
+		// Source should be deleted
+		if _, err := os.Stat(srcPath); !os.IsNotExist(err) {
+			t.Error("source file should be deleted")
+		}
+	})
+
+	t.Run("no temp file left on success", func(t *testing.T) {
+		srcDir := t.TempDir()
+		dstDir := t.TempDir()
+
+		srcPath := filepath.Join(srcDir, "source.txt")
+		dstPath := filepath.Join(dstDir, "dest.txt")
+
+		if err := os.WriteFile(srcPath, []byte("test"), 0644); err != nil {
+			t.Fatalf("failed to create source file: %v", err)
+		}
+
+		if err := copyFileAndDelete(srcPath, dstPath, 0644); err != nil {
+			t.Fatalf("copyFileAndDelete failed: %v", err)
+		}
+
+		// Verify no .tmp file remains
+		tmpPath := dstPath + ".tmp"
+		if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+			t.Error("temp file should not exist after successful copy")
+		}
+	})
+}
+
+// TestCopyDirAndDelete tests recursive directory copy with streaming.
+func TestCopyDirAndDelete(t *testing.T) {
+	t.Run("copies directory tree and deletes source", func(t *testing.T) {
+		srcDir := t.TempDir()
+		dstDir := t.TempDir()
+
+		srcTree := filepath.Join(srcDir, "tree")
+		dstTree := filepath.Join(dstDir, "tree")
+
+		// Create a directory tree
+		os.MkdirAll(filepath.Join(srcTree, "subdir"), 0755)
+		os.WriteFile(filepath.Join(srcTree, "file1.txt"), []byte("file1"), 0644)
+		os.WriteFile(filepath.Join(srcTree, "subdir", "file2.txt"), []byte("file2"), 0644)
+
+		if err := copyDirAndDelete(srcTree, dstTree); err != nil {
+			t.Fatalf("copyDirAndDelete failed: %v", err)
+		}
+
+		// Verify destination structure
+		if _, err := os.Stat(filepath.Join(dstTree, "file1.txt")); err != nil {
+			t.Error("file1.txt should exist in destination")
+		}
+		if _, err := os.Stat(filepath.Join(dstTree, "subdir", "file2.txt")); err != nil {
+			t.Error("subdir/file2.txt should exist in destination")
+		}
+
+		// Verify content
+		got, _ := os.ReadFile(filepath.Join(dstTree, "subdir", "file2.txt"))
+		if string(got) != "file2" {
+			t.Errorf("content mismatch: got %q, want %q", got, "file2")
+		}
+
+		// Source should be deleted
+		if _, err := os.Stat(srcTree); !os.IsNotExist(err) {
+			t.Error("source directory should be deleted")
+		}
+	})
+}

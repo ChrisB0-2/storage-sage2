@@ -2950,16 +2950,16 @@ func TestCheckDiskAndPrepare_WithTrashCleanup(t *testing.T) {
 
 func TestDiskThresholds(t *testing.T) {
 	// Verify threshold constants are sensible
-	if DiskThresholdCleanupTrash >= DiskThresholdBypassTrash {
+	if DefaultDiskThresholdCleanupTrash >= DefaultDiskThresholdBypassTrash {
 		t.Errorf("cleanup threshold (%v) should be less than bypass threshold (%v)",
-			DiskThresholdCleanupTrash, DiskThresholdBypassTrash)
+			DefaultDiskThresholdCleanupTrash, DefaultDiskThresholdBypassTrash)
 	}
 
-	if DiskThresholdCleanupTrash < 50.0 || DiskThresholdCleanupTrash > 99.0 {
-		t.Errorf("cleanup threshold (%v) should be between 50 and 99", DiskThresholdCleanupTrash)
+	if DefaultDiskThresholdCleanupTrash < 50.0 || DefaultDiskThresholdCleanupTrash > 99.0 {
+		t.Errorf("cleanup threshold (%v) should be between 50 and 99", DefaultDiskThresholdCleanupTrash)
 	}
 
-	if DiskThresholdBypassTrash < 80.0 || DiskThresholdBypassTrash > 99.9 {
-		t.Errorf("bypass threshold (%v) should be between 80 and 99.9", DiskThresholdBypassTrash)
+	if DefaultDiskThresholdBypassTrash < 80.0 || DefaultDiskThresholdBypassTrash > 99.9 {
+		t.Errorf("bypass threshold (%v) should be between 80 and 99.9", DefaultDiskThresholdBypassTrash)
 	}
 }
