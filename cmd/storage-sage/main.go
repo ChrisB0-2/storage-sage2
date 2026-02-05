@@ -49,6 +49,7 @@ var (
 	exclusions     = flag.String("exclude", "", "comma-separated glob patterns to exclude (e.g., '*.important,keep-*')")
 	enableMetrics  = flag.Bool("metrics", false, "enable Prometheus metrics endpoint")
 	metricsAddr    = flag.String("metrics-addr", "", "metrics server address (default :9090)")
+	maxDeletions   = flag.Int("max-deletions", -1, "max deletions per run (-1 = use config default, 0 = unlimited)")
 
 	// Daemon mode flags
 	daemonMode = flag.Bool("daemon", false, "run as long-running daemon")
@@ -1230,6 +1231,11 @@ func mergeFlags(cfg *config.Config) {
 		cfg.Execution.MaxItems = *maxItems
 	}
 
+	// Merge max-deletions
+	if flagSet["max-deletions"] && *maxDeletions >= 0 {
+		cfg.Execution.MaxDeletionsPerRun = *maxDeletions
+	}
+
 	// Merge depth
 	if flagSet["depth"] && *maxDepth >= 0 {
 		cfg.Scan.MaxDepth = *maxDepth
@@ -1568,7 +1574,10 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 			alreadyGone      int
 			deleteFailed     int
 			bytesFreed       int64
+			hitLimit         bool
 		)
+
+		maxDel := cfg.Execution.MaxDeletionsPerRun
 
 		for _, it := range plan {
 			// Only attempt actions for items already allowed by policy + scan-time safety.
@@ -1585,6 +1594,12 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 			if ar.Deleted {
 				deletedCount++
 				bytesFreed += ar.BytesFreed
+
+				// Check batch limit (0 = unlimited)
+				if maxDel > 0 && deletedCount >= maxDel {
+					hitLimit = true
+					break
+				}
 			}
 
 			// Outcome accounting
@@ -1597,6 +1612,14 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 			}
 		}
 
+		if hitLimit {
+			log.Warn("batch limit reached, remaining files will be processed in next run",
+				logger.F("limit", maxDel),
+				logger.F("deleted", deletedCount),
+				logger.F("bytes_freed", bytesFreed),
+			)
+		}
+
 		log.Info("execution complete",
 			logger.F("actions_attempted", actionsAttempted),
 			logger.F("deleted", deletedCount),
@@ -1604,6 +1627,7 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 			logger.F("execute_denies", executeDenied),
 			logger.F("already_gone", alreadyGone),
 			logger.F("delete_failed", deleteFailed),
+			logger.F("hit_limit", hitLimit),
 		)
 	}
 

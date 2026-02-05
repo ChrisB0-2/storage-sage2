@@ -55,13 +55,14 @@ type SafetyConfig struct {
 
 // ExecutionConfig configures execution behavior.
 type ExecutionConfig struct {
-	Mode        string        `yaml:"mode" json:"mode"` // "dry-run" or "execute"
-	Timeout     time.Duration `yaml:"timeout" json:"timeout"`
-	AuditPath   string        `yaml:"audit_path" json:"audit_path"`       // JSONL file path
-	AuditDBPath string        `yaml:"audit_db_path" json:"audit_db_path"` // SQLite database path
-	MaxItems    int           `yaml:"max_items" json:"max_items"`
-	TrashPath   string        `yaml:"trash_path" json:"trash_path"`       // Soft-delete: move files here instead of deleting
-	TrashMaxAge time.Duration `yaml:"trash_max_age" json:"trash_max_age"` // Max age before trash is permanently deleted (0 = keep forever)
+	Mode               string        `yaml:"mode" json:"mode"` // "dry-run" or "execute"
+	Timeout            time.Duration `yaml:"timeout" json:"timeout"`
+	AuditPath          string        `yaml:"audit_path" json:"audit_path"`       // JSONL file path
+	AuditDBPath        string        `yaml:"audit_db_path" json:"audit_db_path"` // SQLite database path
+	MaxItems           int           `yaml:"max_items" json:"max_items"`
+	MaxDeletionsPerRun int           `yaml:"max_deletions_per_run" json:"max_deletions_per_run"` // Stop after N deletions (0 = unlimited)
+	TrashPath          string        `yaml:"trash_path" json:"trash_path"`                       // Soft-delete: move files here instead of deleting
+	TrashMaxAge        time.Duration `yaml:"trash_max_age" json:"trash_max_age"`                 // Max age before trash is permanently deleted (0 = keep forever)
 }
 
 // LoggingConfig configures logging behavior.
@@ -167,12 +168,13 @@ func Default() *Config {
 			EnforceMountBoundary: false,
 		},
 		Execution: ExecutionConfig{
-			Mode:        "dry-run",
-			Timeout:     30 * time.Second,
-			AuditPath:   "",
-			MaxItems:    25,
-			TrashPath:   "",                 // Empty = permanent delete (no soft-delete)
-			TrashMaxAge: 7 * 24 * time.Hour, // 7 days default if trash is enabled
+			Mode:               "dry-run",
+			Timeout:            30 * time.Second,
+			AuditPath:          "",
+			MaxItems:           25,
+			MaxDeletionsPerRun: 10000,             // Safety limit: stop after 10k deletions per run
+			TrashPath:          "",                // Empty = permanent delete (no soft-delete)
+			TrashMaxAge:        7 * 24 * time.Hour, // 7 days default if trash is enabled
 		},
 		Logging: LoggingConfig{
 			Level:  "info",

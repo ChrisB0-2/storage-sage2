@@ -70,6 +70,11 @@ execution:
   timeout: 5m
   max_items: 50
 
+  # Safety limit: stop after N deletions per run (0 = unlimited)
+  # Prevents runaway deletion of millions of files in a single run.
+  # Remaining files will be processed in subsequent runs.
+  max_deletions_per_run: 10000
+
   # Audit logging - track all decisions
   audit_db_path: ~/.local/share/storage-sage/audit.db
 

@@ -204,6 +204,14 @@ func ValidateExecution(exec ExecutionConfig) []ValidationError {
 		})
 	}
 
+	// max_deletions_per_run must be >= 0 (0 = unlimited)
+	if exec.MaxDeletionsPerRun < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "execution.max_deletions_per_run",
+			Message: "must be >= 0 (0 = unlimited)",
+		})
+	}
+
 	// Note: audit_path validation is intentionally relaxed for CLI-only mode
 	// It will be empty by default and that's acceptable
 
