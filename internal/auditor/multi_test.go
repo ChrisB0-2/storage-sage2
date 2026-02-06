@@ -13,12 +13,14 @@ import (
 type mockAuditor struct {
 	mu     sync.Mutex
 	events []core.AuditEvent
+	err    error // error to return from Record (optional)
 }
 
-func (m *mockAuditor) Record(_ context.Context, evt core.AuditEvent) {
+func (m *mockAuditor) Record(_ context.Context, evt core.AuditEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, evt)
+	return m.err
 }
 
 func (m *mockAuditor) Events() []core.AuditEvent {
@@ -186,8 +188,9 @@ type contextCapturingAuditor struct {
 	captureFunc func(context.Context)
 }
 
-func (c *contextCapturingAuditor) Record(ctx context.Context, _ core.AuditEvent) {
+func (c *contextCapturingAuditor) Record(ctx context.Context, _ core.AuditEvent) error {
 	if c.captureFunc != nil {
 		c.captureFunc(ctx)
 	}
+	return nil
 }

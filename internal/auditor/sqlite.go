@@ -125,7 +125,8 @@ func createSchema(db *sql.DB) error {
 }
 
 // Record persists an audit event to the database.
-func (a *SQLiteAuditor) Record(ctx context.Context, evt core.AuditEvent) {
+// Returns an error if the write fails - callers can choose to fail-closed or continue.
+func (a *SQLiteAuditor) Record(ctx context.Context, evt core.AuditEvent) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -199,9 +200,9 @@ func (a *SQLiteAuditor) Record(ctx context.Context, evt core.AuditEvent) {
 	)
 
 	if err != nil {
-		// Log error but don't fail - audit should not break operations
-		fmt.Printf("audit write error: %v\n", err)
+		return fmt.Errorf("audit write failed: %w", err)
 	}
+	return nil
 }
 
 // computeChecksum generates a SHA256 checksum of the record data.

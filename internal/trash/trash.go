@@ -4,6 +4,8 @@ package trash
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -19,9 +21,11 @@ import (
 
 // Manager handles soft-delete operations by moving files to a trash directory.
 type Manager struct {
-	trashPath string
-	maxAge    time.Duration
-	log       logger.Logger
+	trashPath    string
+	maxAge       time.Duration
+	signingKey   []byte   // HMAC key for metadata integrity
+	allowedRoots []string // Paths that can be restored to (empty = any)
+	log          logger.Logger
 }
 
 // Config configures the trash manager.
@@ -33,6 +37,16 @@ type Config struct {
 	// MaxAge is the maximum age of trashed files before they are permanently deleted.
 	// Zero means files are kept forever (manual cleanup required).
 	MaxAge time.Duration
+
+	// SigningKey is the HMAC key for metadata integrity verification.
+	// If empty, a random key is generated (metadata won't survive restarts).
+	// For production, set this to a persistent secret.
+	SigningKey []byte
+
+	// AllowedRoots restricts which paths files can be restored to.
+	// If empty, restoration is allowed to any absolute path.
+	// For security, set this to your scan roots.
+	AllowedRoots []string
 }
 
 // New creates a new trash manager.
@@ -46,15 +60,27 @@ func New(cfg Config, log logger.Logger) (*Manager, error) {
 		log = logger.NewNop()
 	}
 
-	// Ensure trash directory exists
-	if err := os.MkdirAll(cfg.TrashPath, 0755); err != nil {
+	// Ensure trash directory exists with secure permissions (owner only)
+	if err := os.MkdirAll(cfg.TrashPath, 0700); err != nil {
 		return nil, fmt.Errorf("creating trash directory: %w", err)
 	}
 
+	// Generate signing key if not provided
+	signingKey := cfg.SigningKey
+	if len(signingKey) == 0 {
+		signingKey = make([]byte, 32)
+		if _, err := rand.Read(signingKey); err != nil {
+			return nil, fmt.Errorf("generating signing key: %w", err)
+		}
+		log.Warn("using ephemeral signing key - trash metadata will be unverifiable after restart")
+	}
+
 	return &Manager{
-		trashPath: cfg.TrashPath,
-		maxAge:    cfg.MaxAge,
-		log:       log,
+		trashPath:    cfg.TrashPath,
+		maxAge:       cfg.MaxAge,
+		signingKey:   signingKey,
+		allowedRoots: cfg.AllowedRoots,
+		log:          log,
 	}, nil
 }
 
@@ -86,15 +112,19 @@ func (m *Manager) MoveToTrash(path string) (trashPath string, err error) {
 	trashName := fmt.Sprintf("%s_%s_%s", timestamp, hash[:8], safeName)
 	trashPath = filepath.Join(m.trashPath, trashName)
 
-	// Create metadata file
+	// Create signed metadata
 	metaPath := trashPath + ".meta"
-	meta := fmt.Sprintf("original_path: %s\ntrashed_at: %s\nsize: %d\nmode: %s\nmod_time: %s\n",
+	trashedAt := time.Now().Format(time.RFC3339)
+	metaContent := fmt.Sprintf("original_path: %s\ntrashed_at: %s\nsize: %d\nmode: %s\nmod_time: %s",
 		path,
-		time.Now().Format(time.RFC3339),
+		trashedAt,
 		info.Size(),
 		info.Mode().String(),
 		info.ModTime().Format(time.RFC3339),
 	)
+	// Add HMAC signature to prevent tampering
+	signature := m.signMetadata(metaContent)
+	meta := metaContent + "\nsignature: " + signature + "\n"
 
 	// Move the file/directory
 	if err := os.Rename(path, trashPath); err != nil {
@@ -104,8 +134,8 @@ func (m *Manager) MoveToTrash(path string) (trashPath string, err error) {
 		}
 	}
 
-	// Write metadata (best effort - don't fail if this fails)
-	if err := os.WriteFile(metaPath, []byte(meta), 0644); err != nil {
+	// Write metadata with secure permissions (owner only)
+	if err := os.WriteFile(metaPath, []byte(meta), 0600); err != nil {
 		m.log.Warn("failed to write trash metadata", logger.F("path", metaPath), logger.F("error", err.Error()))
 	}
 
@@ -199,28 +229,73 @@ func (m *Manager) Cleanup(ctx context.Context) (count int, bytesFreed int64, err
 }
 
 // Restore restores a file from trash to its original location.
+// Returns an error if metadata signature is invalid or path is not allowed.
 func (m *Manager) Restore(trashPath string) (originalPath string, err error) {
 	if m == nil {
 		return "", fmt.Errorf("trash manager is nil")
 	}
 
-	// Read metadata to get original path
+	// Verify trash path is within our trash directory (prevent path traversal)
+	cleanTrashPath := filepath.Clean(trashPath)
+	if !strings.HasPrefix(cleanTrashPath, m.trashPath+string(os.PathSeparator)) && cleanTrashPath != m.trashPath {
+		return "", fmt.Errorf("invalid trash path: not within trash directory")
+	}
+
+	// Read metadata
 	metaPath := trashPath + ".meta"
 	metaData, err := os.ReadFile(metaPath)
 	if err != nil {
 		return "", fmt.Errorf("reading trash metadata: %w", err)
 	}
 
-	// Parse original path from metadata
+	// Parse metadata and extract signature
+	var signature string
+	var metaLines []string
 	for _, line := range strings.Split(string(metaData), "\n") {
 		if strings.HasPrefix(line, "original_path: ") {
 			originalPath = strings.TrimPrefix(line, "original_path: ")
-			break
+		}
+		if strings.HasPrefix(line, "signature: ") {
+			signature = strings.TrimPrefix(line, "signature: ")
+		} else if line != "" {
+			metaLines = append(metaLines, line)
 		}
 	}
 
 	if originalPath == "" {
 		return "", fmt.Errorf("original path not found in metadata")
+	}
+
+	// Verify HMAC signature to detect tampering
+	if signature == "" {
+		return "", fmt.Errorf("metadata signature missing - possible tampering")
+	}
+	metaContent := strings.Join(metaLines, "\n")
+	if !m.verifyMetadata(metaContent, signature) {
+		return "", fmt.Errorf("metadata signature invalid - tampering detected")
+	}
+
+	// Validate original path is absolute and clean
+	if !filepath.IsAbs(originalPath) {
+		return "", fmt.Errorf("original path must be absolute: %q", originalPath)
+	}
+	cleanOriginal := filepath.Clean(originalPath)
+	if cleanOriginal != originalPath {
+		return "", fmt.Errorf("original path is not clean: %q", originalPath)
+	}
+
+	// Validate path is within allowed roots (if configured)
+	if len(m.allowedRoots) > 0 {
+		allowed := false
+		for _, root := range m.allowedRoots {
+			if strings.HasPrefix(cleanOriginal, root+string(os.PathSeparator)) || cleanOriginal == root {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", fmt.Errorf("restore path not within allowed roots: %q", originalPath)
+		}
 	}
 
 	// Ensure parent directory exists
@@ -239,6 +314,19 @@ func (m *Manager) Restore(trashPath string) (originalPath string, err error) {
 	m.log.Info("restored from trash", logger.F("trash", trashPath), logger.F("original", originalPath))
 
 	return originalPath, nil
+}
+
+// signMetadata generates an HMAC-SHA256 signature for metadata content.
+func (m *Manager) signMetadata(content string) string {
+	mac := hmac.New(sha256.New, m.signingKey)
+	mac.Write([]byte(content))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// verifyMetadata checks if the signature matches the content.
+func (m *Manager) verifyMetadata(content, signature string) bool {
+	expected := m.signMetadata(content)
+	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
 // List returns all items currently in trash.

@@ -457,12 +457,14 @@ func (m *mockMetrics) SetLastRunTimestamp(t time.Time) {}
 type mockAuditor struct {
 	mu     sync.Mutex
 	events []core.AuditEvent
+	err    error // error to return from Record (optional)
 }
 
-func (m *mockAuditor) Record(_ context.Context, evt core.AuditEvent) {
+func (m *mockAuditor) Record(_ context.Context, evt core.AuditEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.events = append(m.events, evt)
+	return m.err
 }
 
 func (m *mockAuditor) EventCount() int {
@@ -596,8 +598,8 @@ func TestExecuteRecordsAuditEvent(t *testing.T) {
 	}
 
 	evt := aud.events[0]
-	if evt.Action != "delete" {
-		t.Errorf("expected action 'delete', got '%s'", evt.Action)
+	if evt.Action != "execute" {
+		t.Errorf("expected action 'execute', got '%s'", evt.Action)
 	}
 	if evt.Path != testFile {
 		t.Errorf("expected path '%s', got '%s'", testFile, evt.Path)

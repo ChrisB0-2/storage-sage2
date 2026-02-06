@@ -45,7 +45,7 @@ func (a *JSONLAuditor) Err() error {
 	return a.writeErr
 }
 
-func (a *JSONLAuditor) Record(_ context.Context, evt core.AuditEvent) {
+func (a *JSONLAuditor) Record(_ context.Context, evt core.AuditEvent) error {
 	// Make sure Time is always set.
 	if evt.Time.IsZero() {
 		evt.Time = time.Now()
@@ -54,7 +54,7 @@ func (a *JSONLAuditor) Record(_ context.Context, evt core.AuditEvent) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.f == nil {
-		return
+		return nil
 	}
 
 	// Keep Err JSON-safe (string).
@@ -83,9 +83,13 @@ func (a *JSONLAuditor) Record(_ context.Context, evt core.AuditEvent) {
 		if a.writeErr == nil {
 			a.writeErr = err
 		}
-		return
+		return err
 	}
-	if _, err := a.f.Write(append(b, '\n')); err != nil && a.writeErr == nil {
-		a.writeErr = err
+	if _, err := a.f.Write(append(b, '\n')); err != nil {
+		if a.writeErr == nil {
+			a.writeErr = err
+		}
+		return err
 	}
+	return nil
 }

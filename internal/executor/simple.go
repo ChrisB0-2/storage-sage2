@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -25,27 +26,35 @@ const (
 	reasonCtxCanceled  = "ctx_canceled"
 )
 
+// ErrAuditFailed is returned when deletion is halted due to a prior audit failure.
+// In fail-closed mode, this prevents further unaudited deletions.
+var ErrAuditFailed = errors.New("halted: prior audit write failed (fail-closed mode)")
+
 // Simple is a safe-by-default deleter.
 // It enforces an execute-time safety re-check (TOCTOU hard gate) immediately before mutation.
 // If an Auditor is provided, it records an AuditEvent for each executed item outcome.
 type Simple struct {
-	safe    core.Safety
-	aud     core.Auditor
-	cfg     core.SafetyConfig
-	now     func() time.Time
-	log     logger.Logger
-	metrics core.Metrics
-	trash   *trash.Manager
+	safe             core.Safety
+	aud              core.Auditor
+	cfg              core.SafetyConfig
+	now              func() time.Time
+	log              logger.Logger
+	metrics          core.Metrics
+	trash            *trash.Manager
+	failOnAuditError bool  // If true, halt deletions when audit fails (default: true)
+	lastAuditErr     error // Last audit error, checked at start of Execute
 }
 
 // NewSimple creates an executor with no-op logging and metrics.
+// By default, fail-closed auditing is enabled (halt on audit failure).
 func NewSimple(safe core.Safety, cfg core.SafetyConfig) *Simple {
 	return &Simple{
-		safe:    safe,
-		cfg:     cfg,
-		now:     time.Now,
-		log:     logger.NewNop(),
-		metrics: metrics.NewNoop(),
+		safe:             safe,
+		cfg:              cfg,
+		now:              time.Now,
+		log:              logger.NewNop(),
+		metrics:          metrics.NewNoop(),
+		failOnAuditError: true, // Fail-closed by default
 	}
 }
 
@@ -55,11 +64,12 @@ func NewSimpleWithLogger(safe core.Safety, cfg core.SafetyConfig, log logger.Log
 		log = logger.NewNop()
 	}
 	return &Simple{
-		safe:    safe,
-		cfg:     cfg,
-		now:     time.Now,
-		log:     log,
-		metrics: metrics.NewNoop(),
+		safe:             safe,
+		cfg:              cfg,
+		now:              time.Now,
+		log:              log,
+		metrics:          metrics.NewNoop(),
+		failOnAuditError: true, // Fail-closed by default
 	}
 }
 
@@ -72,11 +82,12 @@ func NewSimpleWithMetrics(safe core.Safety, cfg core.SafetyConfig, log logger.Lo
 		m = metrics.NewNoop()
 	}
 	return &Simple{
-		safe:    safe,
-		cfg:     cfg,
-		now:     time.Now,
-		log:     log,
-		metrics: m,
+		safe:             safe,
+		cfg:              cfg,
+		now:              time.Now,
+		log:              log,
+		metrics:          m,
+		failOnAuditError: true, // Fail-closed by default
 	}
 }
 
@@ -92,9 +103,29 @@ func (e *Simple) WithTrash(t *trash.Manager) *Simple {
 	return e
 }
 
+// WithFailOnAuditError configures whether to halt deletions when audit fails.
+// Default is true (fail-closed). Set to false for degraded mode (continue despite audit failures).
+func (e *Simple) WithFailOnAuditError(fail bool) *Simple {
+	e.failOnAuditError = fail
+	return e
+}
+
+// LastAuditError returns the last audit error, if any.
+// Useful for diagnostics when deletions are halted.
+func (e *Simple) LastAuditError() error {
+	return e.lastAuditErr
+}
+
+// ClearAuditError clears the last audit error, allowing deletions to resume.
+// Only use after the underlying issue (e.g., disk space) is resolved.
+func (e *Simple) ClearAuditError() {
+	e.lastAuditErr = nil
+}
+
 // Execute performs the action for one PlanItem.
 //
 // Hard gates in order:
+//  0. audit failure check (fail-closed: halt if prior audit failed)
 //  1. policy allow (item.Decision.Allow)
 //  2. scan-time safety allow (item.Safety.Allowed)
 //  3. execute-time safety re-check (safe.Validate) to prevent TOCTOU
@@ -113,6 +144,19 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 		Mode:      mode,
 		Score:     item.Decision.Score,
 		StartedAt: start,
+	}
+
+	// Gate 0: Fail-closed audit check
+	// If a prior audit failed and fail-closed mode is enabled, halt all further deletions.
+	// This limits unaudited deletions to at most 1 (the one that triggered the failure).
+	if e.failOnAuditError && e.lastAuditErr != nil {
+		res.Reason = "audit_failed"
+		res.Err = ErrAuditFailed
+		res.FinishedAt = e.now()
+		e.log.Error("deletion halted due to prior audit failure",
+			logger.F("path", item.Candidate.Path),
+			logger.F("audit_error", e.lastAuditErr.Error()))
+		return res // No audit recorded for halted operations
 	}
 
 	// Always finalize + audit on return.
@@ -192,11 +236,11 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 				return res
 			}
 
-			e.log.Info("trashed", logger.F("path", item.Candidate.Path), logger.F("trash_path", trashPath), logger.F("bytes_freed", item.Candidate.SizeBytes))
+			e.log.Info("trashed", logger.F("path", item.Candidate.Path), logger.F("trash_path", trashPath), logger.F("size", item.Candidate.SizeBytes))
 			e.metrics.IncFilesDeleted(item.Candidate.Root)
-			e.metrics.AddBytesFreed(item.Candidate.SizeBytes)
+			// No AddBytesFreed — file still exists on disk (just moved to trash)
 			res.Deleted = true
-			res.BytesFreed = item.Candidate.SizeBytes
+			res.BytesFreed = 0
 			res.Reason = reasonTrashed
 			return res
 		}
@@ -258,11 +302,11 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 				return res
 			}
 
-			e.log.Info("trashed", logger.F("path", item.Candidate.Path), logger.F("trash_path", trashPath), logger.F("bytes_freed", dirSize), logger.F("type", "dir"))
+			e.log.Info("trashed", logger.F("path", item.Candidate.Path), logger.F("trash_path", trashPath), logger.F("size", dirSize), logger.F("type", "dir"))
 			e.metrics.IncDirsDeleted(item.Candidate.Root)
-			e.metrics.AddBytesFreed(dirSize)
+			// No AddBytesFreed — directory still exists on disk (just moved to trash)
 			res.Deleted = true
-			res.BytesFreed = dirSize
+			res.BytesFreed = 0
 			res.Reason = reasonTrashed
 			return res
 		}
@@ -296,7 +340,8 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 }
 
 // record writes one audit event if an auditor is configured.
-// It intentionally never panics and never blocks deletes if auditing fails.
+// If fail-closed mode is enabled and the audit write fails, subsequent
+// Execute calls will be halted to prevent unaudited deletions.
 func (e *Simple) record(ctx context.Context, item core.PlanItem, res core.ActionResult) {
 	if e.aud == nil {
 		return
@@ -307,8 +352,8 @@ func (e *Simple) record(ctx context.Context, item core.PlanItem, res core.Action
 		Level: "info",
 		Action: func() string {
 			switch res.Reason {
-			case reasonDeleted:
-				return "delete"
+			case reasonDeleted, reasonTrashed:
+				return "execute"
 			case reasonWouldDelete:
 				return reasonWouldDelete
 			default:
@@ -322,21 +367,33 @@ func (e *Simple) record(ctx context.Context, item core.PlanItem, res core.Action
 			"deleted":        res.Deleted,
 			"bytes_freed":    res.BytesFreed,
 			"reason":         res.Reason,
+			"result_reason":  res.Reason, // For compatibility with existing audit queries
 			"policy_reason":  item.Decision.Reason,
 			"safety_reason":  item.Safety.Reason,
-			"priority_score": item.Decision.Score, // <-- the priority you asked for
+			"priority_score": item.Decision.Score,
 			"root":           item.Candidate.Root,
 		},
 		Err: res.Err,
 	}
 
-	// Best-effort: auditing must never break deletion.
+	// Recover from panics - we still want to capture the error
 	defer func() {
 		if r := recover(); r != nil {
 			e.log.Error("audit record panic recovered",
 				logger.F("panic", r),
 				logger.F("path", res.Path))
+			if e.failOnAuditError {
+				e.lastAuditErr = fmt.Errorf("audit panic: %v", r)
+			}
 		}
 	}()
-	e.aud.Record(ctx, evt)
+
+	if err := e.aud.Record(ctx, evt); err != nil {
+		e.log.Error("audit write failed",
+			logger.F("path", res.Path),
+			logger.F("error", err.Error()))
+		if e.failOnAuditError {
+			e.lastAuditErr = err
+		}
+	}
 }

@@ -576,6 +576,129 @@ func TestRestore(t *testing.T) {
 			t.Fatal("expected error for nil manager")
 		}
 	})
+
+	t.Run("tampered metadata signature is rejected", func(t *testing.T) {
+		trashPath := t.TempDir()
+		srcDir := t.TempDir()
+
+		m, err := New(Config{TrashPath: trashPath}, nil)
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
+
+		// Create and trash a file
+		srcFile := filepath.Join(srcDir, "secure.txt")
+		if err := os.WriteFile(srcFile, []byte("secret"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		trashFile, err := m.MoveToTrash(srcFile)
+		if err != nil {
+			t.Fatalf("MoveToTrash failed: %v", err)
+		}
+
+		// Tamper with metadata - change the original path
+		metaPath := trashFile + ".meta"
+		metaData, err := os.ReadFile(metaPath)
+		if err != nil {
+			t.Fatalf("failed to read meta: %v", err)
+		}
+		// Replace original path with attacker-controlled path
+		tampered := strings.Replace(string(metaData), srcFile, "/etc/passwd", 1)
+		if err := os.WriteFile(metaPath, []byte(tampered), 0600); err != nil {
+			t.Fatalf("failed to write tampered meta: %v", err)
+		}
+
+		// Attempt restore - should fail due to signature mismatch
+		_, err = m.Restore(trashFile)
+		if err == nil {
+			t.Fatal("expected error for tampered metadata")
+		}
+		if !strings.Contains(err.Error(), "signature invalid") && !strings.Contains(err.Error(), "tampering") {
+			t.Errorf("error should mention tampering: %v", err)
+		}
+	})
+
+	t.Run("missing signature is rejected", func(t *testing.T) {
+		trashPath := t.TempDir()
+
+		m, err := New(Config{TrashPath: trashPath}, nil)
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
+
+		// Create a file with unsigned metadata (attacker-created)
+		trashFile := filepath.Join(trashPath, "unsigned.txt")
+		metaFile := trashFile + ".meta"
+		if err := os.WriteFile(trashFile, []byte("payload"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+		// Metadata without signature
+		meta := "original_path: /etc/passwd\ntrashed_at: 2024-01-01T00:00:00Z\n"
+		if err := os.WriteFile(metaFile, []byte(meta), 0644); err != nil {
+			t.Fatalf("failed to create meta: %v", err)
+		}
+
+		_, err = m.Restore(trashFile)
+		if err == nil {
+			t.Fatal("expected error for missing signature")
+		}
+		if !strings.Contains(err.Error(), "signature missing") {
+			t.Errorf("error should mention missing signature: %v", err)
+		}
+	})
+
+	t.Run("restore outside allowed roots is rejected", func(t *testing.T) {
+		trashPath := t.TempDir()
+		srcDir := t.TempDir()
+		allowedRoot := t.TempDir() // Different from srcDir
+
+		m, err := New(Config{
+			TrashPath:    trashPath,
+			AllowedRoots: []string{allowedRoot},
+		}, nil)
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
+
+		// Create and trash a file from srcDir (NOT in allowedRoot)
+		srcFile := filepath.Join(srcDir, "outside.txt")
+		if err := os.WriteFile(srcFile, []byte("content"), 0644); err != nil {
+			t.Fatalf("failed to create file: %v", err)
+		}
+
+		trashFile, err := m.MoveToTrash(srcFile)
+		if err != nil {
+			t.Fatalf("MoveToTrash failed: %v", err)
+		}
+
+		// Attempt restore - should fail because srcDir is not in allowedRoots
+		_, err = m.Restore(trashFile)
+		if err == nil {
+			t.Fatal("expected error for restore outside allowed roots")
+		}
+		if !strings.Contains(err.Error(), "allowed roots") {
+			t.Errorf("error should mention allowed roots: %v", err)
+		}
+	})
+
+	t.Run("path traversal in trash path is rejected", func(t *testing.T) {
+		trashPath := t.TempDir()
+
+		m, err := New(Config{TrashPath: trashPath}, nil)
+		if err != nil {
+			t.Fatalf("failed to create manager: %v", err)
+		}
+
+		// Try to restore from outside trash directory
+		_, err = m.Restore("/etc/passwd")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+		if !strings.Contains(err.Error(), "not within trash") {
+			t.Errorf("error should mention invalid path: %v", err)
+		}
+	})
 }
 
 func TestList(t *testing.T) {

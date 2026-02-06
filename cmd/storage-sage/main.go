@@ -111,6 +111,9 @@ func main() {
 	// 2. Merge CLI flags over config values
 	mergeFlags(cfg)
 
+	// 2b. Expand ~ in paths (Go does not expand tilde)
+	expandConfigPaths(cfg)
+
 	// 3. Validate final configuration
 	if err := config.ValidateFinal(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -257,7 +260,7 @@ logging:
 
 daemon:
   enabled: true
-  http_addr: ":8080"
+  http_addr: "127.0.0.1:8080"
   schedule: "6h"
   trigger_timeout: 30m
 
@@ -266,7 +269,7 @@ metrics:
   namespace: storage_sage
 `, configFile, dataDir, trashDir)
 
-	if err := os.WriteFile(configFile, []byte(defaultConfig), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(defaultConfig), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not write config file: %v\n", err)
 		os.Exit(1)
 	}
@@ -1087,8 +1090,8 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 			Message:   fmt.Sprintf("Cleanup started for %s", rootStr),
 		})
 
-		// Run cleanup
-		err := runCore(cfg, log, m)
+		// Run cleanup (pass ctx for bypass-trash and cancellation propagation)
+		err := runCore(ctx, cfg, log, m, sqlAud)
 
 		// Build summary and notify
 		duration := time.Since(startTime)
@@ -1350,6 +1353,30 @@ func mergeFlags(cfg *config.Config) {
 	}
 }
 
+// expandHome replaces a leading "~/" with the user's home directory.
+// Returns the path unchanged if it doesn't start with "~/" or if the
+// home directory cannot be determined.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
+}
+
+// expandConfigPaths expands ~ in all config paths that may reference
+// the user's home directory. Go does not expand tilde — passing "~/"
+// literally creates a directory named "~" in the working directory.
+func expandConfigPaths(cfg *config.Config) {
+	cfg.Execution.AuditPath = expandHome(cfg.Execution.AuditPath)
+	cfg.Execution.AuditDBPath = expandHome(cfg.Execution.AuditDBPath)
+	cfg.Execution.TrashPath = expandHome(cfg.Execution.TrashPath)
+	cfg.Daemon.PIDFile = expandHome(cfg.Daemon.PIDFile)
+}
+
 // initLogger creates a logger based on configuration.
 // Returns the logger and an optional cleanup function for Loki.
 func initLogger(cfg config.LoggingConfig) (logger.Logger, func(), error) {
@@ -1427,14 +1454,16 @@ func run(cfg *config.Config, log logger.Logger) error {
 		m = metrics.NewNoop()
 	}
 
-	return runCore(cfg, log, m)
+	return runCore(context.Background(), cfg, log, m, nil)
 }
 
 // runCore executes the main storage-sage cleanup logic with provided metrics.
+// parent is used as the base context (carries bypass-trash flag, daemon cancellation, etc.).
+// sharedAuditor, if non-nil, is reused instead of opening a new SQLite connection.
 //
 //nolint:gocyclo // Main orchestration function; complexity reflects feature breadth
-func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Execution.Timeout)
+func runCore(parent context.Context, cfg *config.Config, log logger.Logger, m core.Metrics, sharedAuditor *auditor.SQLiteAuditor) error {
+	ctx, cancel := context.WithTimeout(parent, cfg.Execution.Timeout)
 	defer cancel()
 
 	runMode := core.Mode(cfg.Execution.Mode)
@@ -1459,20 +1488,27 @@ func runCore(cfg *config.Config, log logger.Logger, m core.Metrics) error {
 	}
 
 	// SQLite auditor (for long-term storage)
+	// Reuse the shared auditor from daemon mode to avoid concurrent connections
+	// to the same database file. Only open a new connection in one-shot mode.
 	if cfg.Execution.AuditDBPath != "" {
-		sqlAud, err := auditor.NewSQLite(auditor.SQLiteConfig{
-			Path: cfg.Execution.AuditDBPath,
-		})
-		if err != nil {
-			return fmt.Errorf("audit sqlite init failed: %w", err)
-		}
-		auditors = append(auditors, sqlAud)
-		log.Info("sqlite audit enabled", logger.F("path", cfg.Execution.AuditDBPath))
-		defer func() {
-			if err := sqlAud.Close(); err != nil {
-				log.Warn("audit db close error", logger.F("error", err.Error()))
+		if sharedAuditor != nil {
+			auditors = append(auditors, sharedAuditor)
+			log.Debug("sqlite audit reusing shared connection", logger.F("path", cfg.Execution.AuditDBPath))
+		} else {
+			sqlAud, err := auditor.NewSQLite(auditor.SQLiteConfig{
+				Path: cfg.Execution.AuditDBPath,
+			})
+			if err != nil {
+				return fmt.Errorf("audit sqlite init failed: %w", err)
 			}
-		}()
+			auditors = append(auditors, sqlAud)
+			log.Info("sqlite audit enabled", logger.F("path", cfg.Execution.AuditDBPath))
+			defer func() {
+				if err := sqlAud.Close(); err != nil {
+					log.Warn("audit db close error", logger.F("error", err.Error()))
+				}
+			}()
+		}
 	}
 
 	// Combine auditors if multiple configured

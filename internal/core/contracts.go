@@ -111,7 +111,9 @@ type Deleter interface {
 }
 
 type Auditor interface {
-	Record(ctx context.Context, evt AuditEvent)
+	// Record persists an audit event. Returns an error if the write fails.
+	// Callers should check errors when fail-closed auditing is required.
+	Record(ctx context.Context, evt AuditEvent) error
 }
 
 type AuditEvent struct {

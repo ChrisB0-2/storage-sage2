@@ -278,10 +278,61 @@ All services remain healthy; no duplicate container errors.
 
 ---
 
+## Scaling Limits & Memory Characteristics
+
+### Design Philosophy
+
+Storage-sage builds a **complete deletion plan in memory** before executing any deletions. This is an intentional design choice that prioritizes **safety and auditability** over extreme scale:
+
+- Full plan allows pre-execution audit logging of all decisions
+- Sorted priority ordering ensures highest-value deletions happen first
+- Complete visibility into what will be deleted before any mutation
+
+This architecture does **not** support streaming/incremental processing.
+
+### Memory Usage by File Count
+
+| Files Scanned | Memory Usage | Notes |
+|---------------|--------------|-------|
+| 10,000 | ~5 MB | Negligible |
+| 100,000 | ~30 MB | Typical workload |
+| 1,000,000 | ~500 MB | Heavy workload |
+| 10,000,000 | ~5 GB | Requires large instance |
+
+**Formula**: ~500 bytes per candidate (struct overhead + path strings + metadata)
+
+### Recommended Limits
+
+| Deployment Size | Max Files | Instance Memory |
+|-----------------|-----------|-----------------|
+| Small (dev/test) | 100k | 1 GB |
+| Medium (production) | 1M | 2 GB |
+| Large (enterprise) | 10M | 8 GB |
+
+### If You Have More Files
+
+For environments with >10M files in target directories:
+
+1. **Scope scan roots narrowly** - Use specific subdirectories instead of top-level paths
+2. **Use multiple instances** - Each instance handles a subset of directories
+3. **Increase `min_age_days`** - Reduce candidate count by being more selective
+4. **Raise `min_size_mb`** - Skip small files to reduce plan size
+
+### What This Means
+
+- **1 million files**: Works fine on standard 2GB containers
+- **10 million files**: Needs dedicated 8GB+ instance
+- **100 million+ files**: Architecture not designed for this scale; use specialized tools
+
+This is a deliberate tradeoff. The alternative (streaming deletion without full plan) would sacrifice the pre-execution audit trail and priority ordering that make storage-sage safe for production use.
+
+---
+
 ## Risks & Mitigations
 
 | Risk | Severity | Mitigation | Status |
 |------|----------|------------|--------|
+| Memory usage scales with file count | Medium | Documented limits above; scope roots narrowly | Documented |
 | Podman HEALTHCHECK ignored | Low | Works in Docker; cosmetic in Podman | Documented |
 | No .env.example | Low | Defaults work; document in quickstart | Documented |
 | Grafana default password | Medium | Documented as "changeme"; for demo only | Acceptable |

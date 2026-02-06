@@ -76,9 +76,11 @@ execution:
   max_deletions_per_run: 10000
 
   # Audit logging - track all decisions
+  # Note: ~/ is expanded to your home directory at runtime
   audit_db_path: ~/.local/share/storage-sage/audit.db
 
   # Soft-delete - files go to trash first (recoverable!)
+  # Note: ~/ is expanded to your home directory at runtime
   trash_path: ~/.local/share/storage-sage/trash
   trash_max_age: 168h  # 7 days before permanent deletion
 
