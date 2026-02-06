@@ -252,6 +252,7 @@ execution:
   audit_db_path: %s/audit.db
   trash_path: %s
   trash_max_age: 168h
+  trash_signing_key_path: %s/trash.key
 
 logging:
   level: info
@@ -267,7 +268,7 @@ daemon:
 metrics:
   enabled: true
   namespace: storage_sage
-`, configFile, dataDir, trashDir)
+`, configFile, dataDir, trashDir, dataDir)
 
 	if err := os.WriteFile(configFile, []byte(defaultConfig), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not write config file: %v\n", err)
@@ -1155,13 +1156,25 @@ func runDaemon(cfg *config.Config, log logger.Logger) error {
 		}
 	}
 
+	// Load persistent signing key for trash metadata integrity
+	var trashSigningKey []byte
+	if cfg.Execution.TrashSigningKeyPath != "" {
+		var err error
+		trashSigningKey, err = trash.LoadOrCreateSigningKey(cfg.Execution.TrashSigningKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load trash signing key: %w", err)
+		}
+		log.Info("trash signing key loaded", logger.F("path", cfg.Execution.TrashSigningKeyPath))
+	}
+
 	// Initialize trash manager for API endpoints
 	var trashMgr *trash.Manager
 	if cfg.Execution.TrashPath != "" {
 		var err error
 		trashMgr, err = trash.New(trash.Config{
-			TrashPath: cfg.Execution.TrashPath,
-			MaxAge:    cfg.Execution.TrashMaxAge,
+			TrashPath:  cfg.Execution.TrashPath,
+			MaxAge:     cfg.Execution.TrashMaxAge,
+			SigningKey:  trashSigningKey,
 		}, log)
 		if err != nil {
 			log.Warn("failed to initialize trash manager for API", logger.F("error", err.Error()))
@@ -1374,6 +1387,7 @@ func expandConfigPaths(cfg *config.Config) {
 	cfg.Execution.AuditPath = expandHome(cfg.Execution.AuditPath)
 	cfg.Execution.AuditDBPath = expandHome(cfg.Execution.AuditDBPath)
 	cfg.Execution.TrashPath = expandHome(cfg.Execution.TrashPath)
+	cfg.Execution.TrashSigningKeyPath = expandHome(cfg.Execution.TrashSigningKeyPath)
 	cfg.Daemon.PIDFile = expandHome(cfg.Daemon.PIDFile)
 }
 
@@ -1590,12 +1604,28 @@ func runCore(parent context.Context, cfg *config.Config, log logger.Logger, m co
 	if runMode == core.ModeExecute {
 		del := executor.NewSimpleWithMetrics(safe, safetyCfg, log, m)
 
+		// Wire auditor for fail-closed safety gate
+		if aud != nil {
+			del.WithAuditor(aud)
+		}
+
 		// Configure soft-delete if trash path is set
 		if cfg.Execution.TrashPath != "" {
-			trashMgr, err := trash.New(trash.Config{
+			trashCfg := trash.Config{
 				TrashPath: cfg.Execution.TrashPath,
 				MaxAge:    cfg.Execution.TrashMaxAge,
-			}, log)
+			}
+
+			// Load persistent signing key if configured
+			if cfg.Execution.TrashSigningKeyPath != "" {
+				sigKey, err := trash.LoadOrCreateSigningKey(cfg.Execution.TrashSigningKeyPath)
+				if err != nil {
+					return fmt.Errorf("failed to load trash signing key: %w", err)
+				}
+				trashCfg.SigningKey = sigKey
+			}
+
+			trashMgr, err := trash.New(trashCfg, log)
 			if err != nil {
 				return fmt.Errorf("failed to initialize trash manager: %w", err)
 			}

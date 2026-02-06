@@ -312,12 +312,16 @@ func (e *Simple) Execute(ctx context.Context, item core.PlanItem, mode core.Mode
 		}
 
 		// Permanent delete (or trash bypassed due to critical disk usage)
-		if err := os.RemoveAll(item.Candidate.Path); err != nil {
+		// Use os.Remove (not os.RemoveAll) so only empty directories are deleted.
+		// Non-empty directories fail with ENOTEMPTY — files must be individually
+		// processed against policy/safety first.
+		if err := os.Remove(item.Candidate.Path); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				res.Reason = reasonAlreadyGone
 				return res
 			}
-			e.log.Warn("delete failed", logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
+			e.log.Warn("delete failed (directory may not be empty — files must be processed individually)",
+				logger.F("path", item.Candidate.Path), logger.F("error", err.Error()))
 			e.metrics.IncDeleteErrors(reasonDeleteFailed)
 			res.Reason = reasonDeleteFailed
 			res.Err = err

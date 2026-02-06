@@ -63,6 +63,7 @@ type ExecutionConfig struct {
 	MaxDeletionsPerRun int           `yaml:"max_deletions_per_run" json:"max_deletions_per_run"` // Stop after N deletions (0 = unlimited)
 	TrashPath          string        `yaml:"trash_path" json:"trash_path"`                       // Soft-delete: move files here instead of deleting
 	TrashMaxAge        time.Duration `yaml:"trash_max_age" json:"trash_max_age"`                 // Max age before trash is permanently deleted (0 = keep forever)
+	TrashSigningKeyPath string       `yaml:"trash_signing_key_path" json:"trash_signing_key_path"` // Path to HMAC signing key for trash metadata
 }
 
 // LoggingConfig configures logging behavior.

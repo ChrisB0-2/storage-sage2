@@ -89,6 +89,22 @@ func ValidateFinal(cfg *Config) error {
 	// Re-validate roots in final state
 	errs = append(errs, ValidateRoots(cfg.Scan.Roots)...)
 
+	// Cross-field: execute mode + min_age_days: 0 is dangerous (deletes files of any age)
+	if cfg.Execution.Mode == "execute" && cfg.Policy.MinAgeDays < 1 {
+		errs = append(errs, ValidationError{
+			Field:   "policy.min_age_days",
+			Message: "must be >= 1 in execute mode (min_age_days: 0 would delete files of any age)",
+		})
+	}
+
+	// Cross-field: execute mode requires at least one audit trail
+	if cfg.Execution.Mode == "execute" && cfg.Execution.AuditPath == "" && cfg.Execution.AuditDBPath == "" {
+		errs = append(errs, ValidationError{
+			Field:   "execution.audit_path",
+			Message: "execute mode requires at least one audit path (audit_path or audit_db_path) for accountability",
+		})
+	}
+
 	if len(errs) > 0 {
 		return errs
 	}

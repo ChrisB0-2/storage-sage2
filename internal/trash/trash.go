@@ -412,6 +412,39 @@ type TrashItem struct {
 	IsDir        bool
 }
 
+// LoadOrCreateSigningKey reads a signing key from path, or generates a new
+// 32-byte random key and persists it with 0600 permissions if the file does
+// not exist. This ensures trash metadata signatures survive restarts.
+func LoadOrCreateSigningKey(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if len(data) < 32 {
+			return nil, fmt.Errorf("signing key file too short (%d bytes, need 32)", len(data))
+		}
+		return data, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("reading signing key: %w", err)
+	}
+
+	// Generate new key
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generating signing key: %w", err)
+	}
+
+	// Ensure parent directory exists
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, fmt.Errorf("creating signing key directory: %w", err)
+	}
+
+	if err := os.WriteFile(path, key, 0600); err != nil {
+		return nil, fmt.Errorf("writing signing key: %w", err)
+	}
+
+	return key, nil
+}
+
 // hashPath generates a short hash of the path for unique naming.
 func hashPath(path string) string {
 	h := sha256.Sum256([]byte(path))

@@ -244,14 +244,7 @@ func TestExecuteDeletesDirectory(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Add files to make it non-empty
-	if err := os.WriteFile(filepath.Join(subdir, "file1.txt"), []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(subdir, "file2.txt"), []byte("world"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
+	// Empty directory — os.Remove succeeds on empty dirs
 	safe := &mockSafety{allowed: true, reason: "ok"}
 	cfg := core.SafetyConfig{AllowedRoots: []string{dir}, AllowDirDelete: true}
 	exec := NewSimple(safe, cfg)
@@ -273,14 +266,56 @@ func TestExecuteDeletesDirectory(t *testing.T) {
 	if result.Reason != "deleted" {
 		t.Errorf("expected reason 'deleted', got '%s'", result.Reason)
 	}
-	// Should report bytes freed (5 + 5 = 10 bytes from the two files)
-	if result.BytesFreed != 10 {
-		t.Errorf("expected BytesFreed=10, got %d", result.BytesFreed)
+	if result.BytesFreed != 0 {
+		t.Errorf("expected BytesFreed=0 for empty dir, got %d", result.BytesFreed)
 	}
 
 	// Directory should be gone
 	if _, err := os.Stat(subdir); !os.IsNotExist(err) {
 		t.Errorf("directory should not exist after execute: %v", err)
+	}
+}
+
+// TestExecuteDirectoryNonEmptyFails verifies that os.Remove fails on non-empty
+// directories (safe behavior — files must be individually processed first).
+func TestExecuteDirectoryNonEmptyFails(t *testing.T) {
+	dir := t.TempDir()
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	safe := &mockSafety{allowed: true, reason: "ok"}
+	cfg := core.SafetyConfig{AllowedRoots: []string{dir}, AllowDirDelete: true}
+	exec := NewSimple(safe, cfg)
+
+	item := core.PlanItem{
+		Candidate: core.Candidate{
+			Path: subdir,
+			Type: core.TargetDir,
+		},
+		Decision: core.Decision{Allow: true, Reason: "age_ok"},
+		Safety:   core.SafetyVerdict{Allowed: true, Reason: "ok"},
+	}
+
+	result := exec.Execute(context.Background(), item, core.ModeExecute)
+
+	if result.Deleted {
+		t.Error("expected Deleted=false for non-empty directory")
+	}
+	if result.Reason != "delete_failed" {
+		t.Errorf("expected reason 'delete_failed', got '%s'", result.Reason)
+	}
+	if result.Err == nil {
+		t.Error("expected error for non-empty directory deletion")
+	}
+
+	// Directory should still exist
+	if _, err := os.Stat(subdir); err != nil {
+		t.Errorf("non-empty directory should still exist: %v", err)
 	}
 }
 
@@ -796,9 +831,7 @@ func TestExecuteFileDeleteFailure(t *testing.T) {
 }
 
 func TestExecuteDirectoryAlreadyGone(t *testing.T) {
-	// Note: os.RemoveAll is idempotent by design - it returns nil when path doesn't exist.
-	// This means for directories, we get "deleted" result with BytesFreed=0, not "already_gone".
-	// This is different from file deletion where os.Remove returns ErrNotExist.
+	// os.Remove returns ErrNotExist for non-existent paths, matching file behavior.
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "nonexistent") // Directory doesn't exist
 
@@ -817,15 +850,11 @@ func TestExecuteDirectoryAlreadyGone(t *testing.T) {
 
 	result := exec.Execute(context.Background(), item, core.ModeExecute)
 
-	// os.RemoveAll succeeds for non-existent paths (idempotent)
-	if !result.Deleted {
-		t.Error("expected Deleted=true (RemoveAll is idempotent)")
+	if result.Deleted {
+		t.Error("expected Deleted=false for non-existent directory")
 	}
-	if result.Reason != "deleted" {
-		t.Errorf("expected reason 'deleted', got '%s'", result.Reason)
-	}
-	if result.BytesFreed != 0 {
-		t.Errorf("expected BytesFreed=0 for non-existent dir, got %d", result.BytesFreed)
+	if result.Reason != "already_gone" {
+		t.Errorf("expected reason 'already_gone', got '%s'", result.Reason)
 	}
 }
 
@@ -953,9 +982,7 @@ func TestExecuteMetricsDirIntegration(t *testing.T) {
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(subdir, "file.txt"), []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Empty directory — os.Remove succeeds on empty dirs
 
 	safe := &mockSafety{allowed: true, reason: "ok"}
 	cfg := core.SafetyConfig{AllowedRoots: []string{dir}, AllowDirDelete: true}
@@ -977,8 +1004,8 @@ func TestExecuteMetricsDirIntegration(t *testing.T) {
 	if m.dirsDeleted[dir] != 1 {
 		t.Errorf("expected dirsDeleted[%s]=1, got %d", dir, m.dirsDeleted[dir])
 	}
-	if m.bytesFreed != 5 {
-		t.Errorf("expected bytesFreed=5, got %d", m.bytesFreed)
+	if m.bytesFreed != 0 {
+		t.Errorf("expected bytesFreed=0 for empty dir, got %d", m.bytesFreed)
 	}
 }
 
@@ -1548,12 +1575,9 @@ func TestExecuteBypassTrashDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a directory with files
+	// Create an empty directory (os.Remove only deletes empty dirs)
 	testDir := filepath.Join(dir, "testdir")
 	if err := os.MkdirAll(testDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(testDir, "file.txt"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
