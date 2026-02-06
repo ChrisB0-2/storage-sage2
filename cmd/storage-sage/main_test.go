@@ -161,7 +161,7 @@ func TestQuerySubcommand(t *testing.T) {
 		{Time: time.Now(), Level: "info", Action: "delete", Path: "/tmp/b.txt"},
 	}
 	for _, evt := range events {
-		sqlAud.Record(context.Background(), evt)
+		_ = sqlAud.Record(context.Background(), evt)
 	}
 	sqlAud.Close()
 
@@ -190,7 +190,7 @@ func TestQuerySubcommandWithFilters(t *testing.T) {
 		{Time: time.Now(), Level: "error", Action: "delete", Path: "/tmp/b.txt"},
 	}
 	for _, evt := range events {
-		sqlAud.Record(context.Background(), evt)
+		_ = sqlAud.Record(context.Background(), evt)
 	}
 	sqlAud.Close()
 
@@ -210,7 +210,7 @@ func TestQuerySubcommandJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create auditor: %v", err)
 	}
-	sqlAud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "test"})
+	_ = sqlAud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "test"})
 	sqlAud.Close()
 
 	output := runCLI(t, "query", "-db", dbPath, "-json")
@@ -237,7 +237,7 @@ func TestStatsSubcommand(t *testing.T) {
 		{Time: time.Now(), Level: "info", Action: "delete", Fields: map[string]any{"bytes_freed": int64(2048)}},
 	}
 	for _, evt := range events {
-		sqlAud.Record(context.Background(), evt)
+		_ = sqlAud.Record(context.Background(), evt)
 	}
 	sqlAud.Close()
 
@@ -262,7 +262,7 @@ func TestVerifySubcommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create auditor: %v", err)
 	}
-	sqlAud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "test"})
+	_ = sqlAud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "test"})
 	sqlAud.Close()
 
 	output := runCLI(t, "verify", "-db", dbPath)
@@ -582,7 +582,7 @@ func TestE2E_FullPipeline_ScanPlanExecute(t *testing.T) {
 	var results []core.ActionResult
 	for _, item := range planItems {
 		// Record plan event
-		aud.Record(ctx, core.NewPlanAuditEvent(root, core.ModeExecute, item))
+		_ = aud.Record(ctx, core.NewPlanAuditEvent(root, core.ModeExecute, item))
 
 		// Execute
 		result := exec.Execute(ctx, item, core.ModeExecute)

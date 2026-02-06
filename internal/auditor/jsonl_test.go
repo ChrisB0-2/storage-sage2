@@ -36,7 +36,7 @@ func TestJSONLAuditor_Record(t *testing.T) {
 		},
 	}
 
-	aud.Record(context.Background(), evt)
+	_ = aud.Record(context.Background(), evt)
 
 	// Check error state
 	if err := aud.Err(); err != nil {
@@ -97,7 +97,7 @@ func TestJSONLAuditor_RecordWithError(t *testing.T) {
 		Err:    errors.New("permission denied"),
 	}
 
-	aud.Record(context.Background(), evt)
+	_ = aud.Record(context.Background(), evt)
 	aud.Close()
 
 	// Read and verify error field
@@ -132,7 +132,7 @@ func TestJSONLAuditor_AutoSetTime(t *testing.T) {
 		Level:  "info",
 		Action: "test",
 	}
-	aud.Record(context.Background(), evt)
+	_ = aud.Record(context.Background(), evt)
 	aud.Close()
 
 	// Read and verify time was set
@@ -177,7 +177,7 @@ func TestJSONLAuditor_MultipleRecords(t *testing.T) {
 			Action: "plan",
 			Path:   "/tmp/file" + string(rune('0'+i)) + ".txt",
 		}
-		aud.Record(context.Background(), evt)
+		_ = aud.Record(context.Background(), evt)
 	}
 	aud.Close()
 
@@ -217,7 +217,7 @@ func TestJSONLAuditor_AppendBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create auditor: %v", err)
 	}
-	aud1.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "first"})
+	_ = aud1.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "first"})
 	aud1.Close()
 
 	// Second auditor session (should append)
@@ -225,7 +225,7 @@ func TestJSONLAuditor_AppendBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create second auditor: %v", err)
 	}
-	aud2.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "second"})
+	_ = aud2.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info", Action: "second"})
 	aud2.Close()
 
 	// Read and verify both records exist
@@ -259,7 +259,7 @@ func TestJSONLAuditor_FilePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create auditor: %v", err)
 	}
-	aud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info"})
+	_ = aud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info"})
 	aud.Close()
 
 	// Check file permissions (should be 0600)
@@ -312,7 +312,7 @@ func TestJSONLAuditor_RecordAfterClose(t *testing.T) {
 	aud.Close()
 
 	// Record after close should not panic
-	aud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info"})
+	_ = aud.Record(context.Background(), core.AuditEvent{Time: time.Now(), Level: "info"})
 
 	// File should be empty or only contain records from before close
 	data, _ := os.ReadFile(path)
@@ -345,7 +345,7 @@ func TestJSONLAuditor_ConcurrentWrites(t *testing.T) {
 					Action: "test",
 					Fields: map[string]any{"goroutine": id, "iteration": j},
 				}
-				aud.Record(context.Background(), evt)
+				_ = aud.Record(context.Background(), evt)
 			}
 		}(i)
 	}
@@ -394,7 +394,7 @@ func TestJSONLAuditor_OmitsEmptyFields(t *testing.T) {
 		Action: "test",
 		Path:   "/test",
 	}
-	aud.Record(context.Background(), evt)
+	_ = aud.Record(context.Background(), evt)
 	aud.Close()
 
 	// Read and verify fields/err are omitted

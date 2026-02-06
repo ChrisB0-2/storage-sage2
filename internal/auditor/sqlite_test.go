@@ -33,7 +33,7 @@ func TestSQLiteAuditor_Record(t *testing.T) {
 		},
 	}
 
-	aud.Record(context.Background(), evt)
+	_ = aud.Record(context.Background(), evt)
 
 	// Query it back
 	records, err := aud.Query(context.Background(), QueryFilter{Limit: 10})
@@ -73,7 +73,7 @@ func TestSQLiteAuditor_Query(t *testing.T) {
 	}
 
 	for _, evt := range events {
-		aud.Record(context.Background(), evt)
+		_ = aud.Record(context.Background(), evt)
 	}
 
 	// Query by action
@@ -128,7 +128,7 @@ func TestSQLiteAuditor_VerifyIntegrity(t *testing.T) {
 		Action: "plan",
 		Path:   "/tmp/test.txt",
 	}
-	aud.Record(context.Background(), evt)
+	_ = aud.Record(context.Background(), evt)
 
 	// Verify integrity - should pass
 	tampered, err := aud.VerifyIntegrity(context.Background())
@@ -179,7 +179,7 @@ func TestSQLiteAuditor_Stats(t *testing.T) {
 		{Time: time.Now(), Level: "error", Action: "execute", Fields: map[string]any{"result_reason": "delete_failed"}},
 	}
 	for _, evt := range events {
-		aud.Record(context.Background(), evt)
+		_ = aud.Record(context.Background(), evt)
 	}
 
 	stats, err := aud.Stats(context.Background())
@@ -226,8 +226,8 @@ func TestSQLiteAuditor_Prune(t *testing.T) {
 	oldEvt := core.AuditEvent{Time: time.Now().Add(-48 * time.Hour), Level: "info", Action: "plan"}
 	newEvt := core.AuditEvent{Time: time.Now(), Level: "info", Action: "plan"}
 
-	aud.Record(context.Background(), oldEvt)
-	aud.Record(context.Background(), newEvt)
+	_ = aud.Record(context.Background(), oldEvt)
+	_ = aud.Record(context.Background(), newEvt)
 
 	// Prune records older than 24 hours
 	deleted, err := aud.Prune(context.Background(), 24*time.Hour)
@@ -256,7 +256,7 @@ func TestSQLiteAuditor_Persistence(t *testing.T) {
 	}
 
 	evt := core.AuditEvent{Time: time.Now(), Level: "info", Action: "test"}
-	aud1.Record(context.Background(), evt)
+	_ = aud1.Record(context.Background(), evt)
 	aud1.Close()
 
 	// Verify file exists

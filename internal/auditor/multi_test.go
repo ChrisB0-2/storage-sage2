@@ -43,7 +43,7 @@ func TestMulti_Record(t *testing.T) {
 		Path:   "/tmp/test.txt",
 	}
 
-	multi.Record(context.Background(), evt)
+	_ = multi.Record(context.Background(), evt)
 
 	// All auditors should have received the event
 	for i, m := range []*mockAuditor{m1, m2, m3} {
@@ -73,7 +73,7 @@ func TestMulti_MultipleRecords(t *testing.T) {
 			Action: "test",
 			Fields: map[string]any{"index": i},
 		}
-		multi.Record(context.Background(), evt)
+		_ = multi.Record(context.Background(), evt)
 	}
 
 	// Both auditors should have 5 events
@@ -96,7 +96,7 @@ func TestMulti_EmptyAuditors(t *testing.T) {
 	}
 
 	// Should not panic
-	multi.Record(context.Background(), evt)
+	_ = multi.Record(context.Background(), evt)
 }
 
 func TestMulti_SingleAuditor(t *testing.T) {
@@ -109,7 +109,7 @@ func TestMulti_SingleAuditor(t *testing.T) {
 		Action: "delete",
 	}
 
-	multi.Record(context.Background(), evt)
+	_ = multi.Record(context.Background(), evt)
 
 	events := m1.Events()
 	if len(events) != 1 {
@@ -139,7 +139,7 @@ func TestMulti_ConcurrentRecords(t *testing.T) {
 					Action: "test",
 					Fields: map[string]any{"goroutine": id, "iteration": j},
 				}
-				multi.Record(context.Background(), evt)
+				_ = multi.Record(context.Background(), evt)
 			}
 		}(i)
 	}
@@ -168,7 +168,7 @@ func TestMulti_PreservesContext(t *testing.T) {
 	}}
 
 	multi := NewMulti(ctxCapture)
-	multi.Record(ctx, core.AuditEvent{Time: time.Now()})
+	_ = multi.Record(ctx, core.AuditEvent{Time: time.Now()})
 
 	if receivedCtx == nil {
 		t.Fatal("context was not passed to auditor")

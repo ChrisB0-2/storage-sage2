@@ -1579,7 +1579,7 @@ func runCore(parent context.Context, cfg *config.Config, log logger.Logger, m co
 	// Plan-time audit: record the plan (allowed/blocked + reasons) before any execution.
 	if aud != nil {
 		for _, it := range plan {
-			aud.Record(ctx, core.NewPlanAuditEvent(auditRoot, runMode, it))
+			_ = aud.Record(ctx, core.NewPlanAuditEvent(auditRoot, runMode, it))
 		}
 	}
 
@@ -1624,7 +1624,7 @@ func runCore(parent context.Context, cfg *config.Config, log logger.Logger, m co
 			actionsAttempted++
 			ar := del.Execute(ctx, it, runMode)
 			if aud != nil {
-				aud.Record(ctx, core.NewExecuteAuditEvent(auditRoot, runMode, it, ar))
+				_ = aud.Record(ctx, core.NewExecuteAuditEvent(auditRoot, runMode, it, ar))
 			}
 
 			if ar.Deleted {

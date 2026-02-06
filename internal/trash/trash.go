@@ -230,6 +230,8 @@ func (m *Manager) Cleanup(ctx context.Context) (count int, bytesFreed int64, err
 
 // Restore restores a file from trash to its original location.
 // Returns an error if metadata signature is invalid or path is not allowed.
+//
+//nolint:gocyclo // Restore necessarily validates metadata, signature, path safety, and filesystem state in one flow.
 func (m *Manager) Restore(trashPath string) (originalPath string, err error) {
 	if m == nil {
 		return "", fmt.Errorf("trash manager is nil")
